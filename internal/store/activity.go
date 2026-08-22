@@ -44,7 +44,22 @@ type Event struct {
 	Detail  string    `json:"detail,omitempty"`
 }
 
+// ChangeHook is called after a mutation has been recorded.
+//
+// It exists so the history package can commit without the store importing it,
+// which would be a cycle. Hooks run inside the write lock, so commits
+// serialise against each other and never observe a half-applied change.
+type ChangeHook func(e Event)
+
+// OnChange registers a hook. The last registration wins; taskgo needs exactly
+// one, and a list would invite ordering questions nothing here can answer.
+func (s *Store) OnChange(h ChangeHook) { s.onChange = h }
+
 // appendEvent adds one line to activity.jsonl.
+//
+// Every mutation appends exactly one event, which makes this the single place
+// that knows a change has landed — and therefore the right place to hang the
+// change hook.
 //
 // This is the one write in the package that is NOT atomic-rename, and that is
 // deliberate. O_APPEND writes below the pipe buffer size are atomic at the
@@ -73,7 +88,14 @@ func (s *Store) appendEvent(e Event) error {
 	if _, err := f.Write(append(line, '\n')); err != nil {
 		return fmt.Errorf("append activity event: %w", err)
 	}
-	return f.Sync()
+	if err := f.Sync(); err != nil {
+		return err
+	}
+
+	if s.onChange != nil {
+		s.onChange(e)
+	}
+	return nil
 }
 
 // Activity returns the most recent events, newest first. A limit of 0 or less

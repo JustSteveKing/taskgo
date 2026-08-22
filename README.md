@@ -105,6 +105,46 @@ None required. Optionally `~/.local/share/taskgo/config.json`:
 `TASKGO_DATA_DIR` overrides the store location and always wins over the config
 file, so scripts and tests can pin it.
 
+## History and undo
+
+The activity log records what happened but cannot reverse any of it, which is a
+thin guarantee for a system an agent can write to unattended. Since the storage
+is already plain text designed to diff, Git turns it into a complete revertible
+history for almost nothing.
+
+```bash
+taskgo history init    # once, opt-in
+taskgo history log
+taskgo undo            # revert the last change
+```
+
+`git log` reads like the activity log, because the commit subject is built from
+the same event:
+
+```
+77f1053  agent: complete #1 — Existing task
+e72c798  agent: create #2 — Created by the agent
+e005ed3  human: create #1 — Existing task
+```
+
+Three decisions worth knowing:
+
+- **Opt-in.** Silently turning your data directory into a Git repository is not
+  something a task manager should do unasked.
+- **Committing is best-effort.** A Git failure never turns a successful task
+  write into an error — the task file is already on disk by then, and a broken
+  repository must not make taskgo unusable.
+- **Undo records the reversal** rather than rewriting history. "This was undone"
+  is itself worth keeping, and an agent's mistake together with its correction
+  tells you more than the mistake never having appeared.
+
+Runtime state (`.lock`, `claims.json`, `sessions.json`, `notified.json`) is
+ignored. It is not history.
+
+Hand edits arrive without going through the store, so they never trigger a
+commit; `taskgo history save` records them. `taskgo undo` refuses while
+anything is uncommitted, rather than sweeping your edit into the revert.
+
 ## Development
 
 ```bash

@@ -52,6 +52,9 @@ type Store struct {
 
 	// now is swappable so tests can pin timestamps.
 	now func() time.Time
+
+	// onChange fires after a mutation is recorded. See OnChange.
+	onChange ChangeHook
 }
 
 // Open prepares a data directory, creating it if absent.

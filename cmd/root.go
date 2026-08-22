@@ -12,6 +12,7 @@ import (
 	"os"
 
 	"github.com/JustSteveKing/taskgo/internal/config"
+	"github.com/JustSteveKing/taskgo/internal/history"
 	"github.com/JustSteveKing/taskgo/internal/store"
 	"github.com/spf13/cobra"
 )
@@ -39,7 +40,13 @@ func (a *app) openStore() (*store.Store, error) {
 		}
 		root = a.cfg.DataDir
 	}
-	return store.Open(root)
+	s, err := store.Open(root)
+	if err != nil {
+		return nil, err
+	}
+	// Wire Git commits if the directory is a repository. A no-op otherwise.
+	history.Attach(s)
+	return s, nil
 }
 
 // emitJSON is the single place JSON output is produced, so every command's
@@ -102,6 +109,8 @@ diff and edit by hand.`,
 		a.newNotifyCommand(),
 		a.newClaimsCommand(),
 		a.newAgentsCommand(),
+		a.newHistoryCommand(),
+		a.newUndoCommand("undo"),
 		a.newQuestionsCommand(),
 		a.newAnswerCommand(),
 		a.newMCPCommand(version),
