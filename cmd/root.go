@@ -69,6 +69,7 @@ diff and edit by hand.`,
 		newReindexCommand(),
 		newDeleteCommand(),
 		newMCPCommand(version),
+		newTUICommand(),
 	)
 
 	return root

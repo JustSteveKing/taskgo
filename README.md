@@ -140,6 +140,28 @@ completing the wrong task is not something the agent can undo.
 The server holds no cached index — it re-reads on every call, so a task you add
 from the CLI is visible to the agent on its next request.
 
+## TUI
+
+```bash
+taskgo tui
+```
+
+| Key | |
+|---|---|
+| `j` `k` | move |
+| `space` | complete / reopen |
+| `s` `p` | cycle status / priority |
+| `/` | filter by title |
+| `a` | show completed too |
+| `enter` | detail view with notes |
+| `q` | quit |
+
+It re-reads the store every couple of seconds while idle, so a task an agent
+creates over MCP appears without you touching anything. It does **not** reload
+while you are typing a filter or reading a task — being two seconds stale beats
+having the list move under your cursor.
+
 ## Status
 
-Working: storage, CLI, MCP server. Next: the TUI.
+Storage, CLI, MCP server and TUI all work. Next: desktop notifications for due
+and overdue tasks, shell completions, and a release build.
