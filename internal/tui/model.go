@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/JustSteveKing/taskgo/internal/agents"
 	"github.com/JustSteveKing/taskgo/internal/claim"
 	"github.com/JustSteveKing/taskgo/internal/store"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -39,6 +40,7 @@ type panel int
 const (
 	panelViews panel = iota
 	panelProjects
+	panelAgents
 	panelTasks
 	panelCount
 )
@@ -49,6 +51,8 @@ func (p panel) title() string {
 		return "Views"
 	case panelProjects:
 		return "Projects"
+	case panelAgents:
+		return "Agents"
 	default:
 		return "Tasks"
 	}
@@ -98,9 +102,11 @@ type model struct {
 	projects []store.ProjectSummary
 	counts   summary
 	claims   claim.Set
+	agents   []agents.Session
 
 	viewCursor    int
 	projectCursor int
+	agentCursor   int
 	taskCursor    int
 
 	detail *store.Task
@@ -127,6 +133,7 @@ type loadedMsg struct {
 	projects []store.ProjectSummary
 	counts   summary
 	claims   claim.Set
+	agents   []agents.Session
 	err      error
 }
 type detailMsg struct {
@@ -170,6 +177,15 @@ func (m model) currentFilter() (store.Filter, string) {
 	return f, v.special
 }
 
+// selectedAgent returns the session the Agents panel is pointing at, if it is
+// pointing at one rather than at "(all)".
+func (m model) selectedAgent() (agents.Session, bool) {
+	if m.agentCursor <= 0 || m.agentCursor-1 >= len(m.agents) {
+		return agents.Session{}, false
+	}
+	return m.agents[m.agentCursor-1], true
+}
+
 func (m model) selectedProject() string {
 	// Index 0 of the Projects panel is "(all)".
 	if m.projectCursor <= 0 || m.projectCursor-1 >= len(m.projects) {
@@ -181,6 +197,11 @@ func (m model) selectedProject() string {
 func (m model) load() tea.Cmd {
 	s := m.store
 	filter, special := m.currentFilter()
+
+	agentSession := ""
+	if sess, ok := m.selectedAgent(); ok {
+		agentSession = sess.ID
+	}
 
 	return func() tea.Msg {
 		now := time.Now()
@@ -207,6 +228,20 @@ func (m model) load() tea.Cmd {
 			var kept []store.IndexEntry
 			for _, t := range tasks {
 				if strings.EqualFold(t.Project, filter.Project) {
+					kept = append(kept, t)
+				}
+			}
+			tasks = kept
+		}
+
+		// Narrowing by agent happens here rather than in store.Filter,
+		// because "held by" is a claim concept and the store deliberately
+		// knows nothing about claims.
+		if agentSession != "" {
+			held, _ := claim.Load(s, now)
+			var kept []store.IndexEntry
+			for _, t := range tasks {
+				if c, ok := held.Get(t.ID); ok && c.Session == agentSession {
 					kept = append(kept, t)
 				}
 			}
@@ -244,11 +279,13 @@ func (m model) load() tea.Cmd {
 		// Claims are ephemeral and read lock-free, so a failure here degrades
 		// the display rather than the whole load.
 		claims, _ := claim.Load(s, now)
+		connected, _ := agents.List(s)
 
 		return loadedMsg{
 			tasks:    tasks,
 			projects: projects,
 			claims:   claims,
+			agents:   connected,
 			counts:   summary{total: len(all), open: open, overdue: len(overdue), today: len(today), waiting: waiting},
 		}
 	}

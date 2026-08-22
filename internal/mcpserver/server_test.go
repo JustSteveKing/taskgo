@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/JustSteveKing/taskgo/internal/agents"
 	"github.com/JustSteveKing/taskgo/internal/claim"
 
 	"github.com/JustSteveKing/taskgo/internal/store"
@@ -614,5 +615,62 @@ func TestAgentsCannotAnswerThemselves(t *testing.T) {
 		if tool.Name == "answer_question" || tool.Name == "answer" {
 			t.Errorf("tool %q lets an agent answer its own question, defeating the point of asking", tool.Name)
 		}
+	}
+}
+
+// ---------------------------------------------------------------- sessions
+
+// Every tool must mark the agent as present, not just the ones that write.
+// An agent that connects and only reads is still here, and an empty Agents
+// panel while an agent is plainly running would be worse than no panel.
+func TestEveryToolMarksTheAgentAsConnected(t *testing.T) {
+	readOnly := []struct {
+		tool string
+		args map[string]any
+	}{
+		{"list_tasks", map[string]any{}},
+		{"get_today", map[string]any{}},
+		{"get_overdue", map[string]any{}},
+		{"list_projects", map[string]any{}},
+		{"get_activity", map[string]any{}},
+		{"list_claims", map[string]any{}},
+		{"list_questions", map[string]any{}},
+		{"search_tasks", map[string]any{"query": "anything"}},
+	}
+
+	for _, tc := range readOnly {
+		t.Run(tc.tool, func(t *testing.T) {
+			cs, s := connect(t)
+			call(t, cs, tc.tool, tc.args, nil)
+
+			connected, err := agents.List(s)
+			if err != nil {
+				t.Fatalf("agents.List: %v", err)
+			}
+			if len(connected) != 1 {
+				t.Fatalf("%s did not register the agent: %+v", tc.tool, connected)
+			}
+			if connected[0].Name != "test-client" {
+				t.Errorf("session name = %q", connected[0].Name)
+			}
+		})
+	}
+}
+
+// claim_task in particular: it identifies the session, and used to forget to
+// register it, so an agent holding tasks was missing from the roster.
+func TestClaimingRegistersTheSession(t *testing.T) {
+	cs, s := connect(t)
+
+	var created store.Task
+	call(t, cs, "create_task", map[string]any{"title": "Held"}, &created)
+	call(t, cs, "claim_task", map[string]any{"id": created.ID}, nil)
+
+	connected, err := agents.List(s)
+	if err != nil {
+		t.Fatalf("agents.List: %v", err)
+	}
+	if len(connected) != 1 {
+		t.Fatalf("agent holding a task is not in the roster: %+v", connected)
 	}
 }

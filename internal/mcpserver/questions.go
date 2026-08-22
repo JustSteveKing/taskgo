@@ -56,7 +56,8 @@ func registerQuestionTools(srv *mcp.Server, s *store.Store, sess *sessions) {
 		Name: "check_answer",
 		Description: "See whether the human has answered your question on a task. " +
 			"Returns answered=false while it is still pending.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, in taskIDIn) (*mcp.CallToolResult, answerOut, error) {
+	}, func(ctx context.Context, req *mcp.CallToolRequest, in taskIDIn) (*mcp.CallToolResult, answerOut, error) {
+		seen(s, sess, req)
 		task, err := s.Get(in.ID)
 		if err != nil {
 			return nil, answerOut{}, err
@@ -85,7 +86,8 @@ func registerQuestionTools(srv *mcp.Server, s *store.Store, sess *sessions) {
 		Description: "Every task currently waiting on a human answer, including questions " +
 			"asked by other agents. Worth checking before asking a question someone " +
 			"else has already put to them.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, questionList, error) {
+	}, func(ctx context.Context, req *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, questionList, error) {
+		seen(s, sess, req)
 		entries, err := s.Waiting()
 		if err != nil {
 			return nil, questionList{}, err

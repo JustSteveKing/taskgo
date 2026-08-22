@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/JustSteveKing/taskgo/internal/agents"
 	"github.com/JustSteveKing/taskgo/internal/store"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -68,6 +69,29 @@ func TestSideColumnFitsWhateverTheViewCountIs(t *testing.T) {
 		side := m.sideColumn(body)
 		if got := len(strings.Split(side, "\n")); got != body {
 			t.Errorf("height %d: side column is %d lines, want %d", height, got, body)
+		}
+	}
+}
+
+// The Agents panel appears only when something is connected, and its presence
+// must not push the layout off the bottom either.
+func TestSideColumnFitsWithAgentsPanel(t *testing.T) {
+	s, _ := store.Open(t.TempDir())
+
+	for _, n := range []int{0, 1, 3, 8} {
+		for _, height := range []int{10, 12, 15, 20, 40, 63} {
+			m := New(s, "test")
+			m.width, m.height = 100, height
+			for i := 0; i < n; i++ {
+				m.agents = append(m.agents, agents.Session{ID: "s", Name: "agent"})
+			}
+
+			body := height - 2
+			got := len(strings.Split(m.sideColumn(body), "\n"))
+			if got != body {
+				t.Errorf("%d agents at height %d: side column is %d lines, want %d",
+					n, height, got, body)
+			}
 		}
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/JustSteveKing/taskgo/internal/agents"
 	"github.com/JustSteveKing/taskgo/internal/claim"
 	"github.com/JustSteveKing/taskgo/internal/store"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -45,6 +46,7 @@ func Run(ctx context.Context, s *store.Store, version string) error {
 	now := time.Now()
 	for _, id := range sess.known() {
 		claim.ReleaseSession(s, id, now)
+		agents.Unregister(s, id)
 	}
 
 	if err != nil && stdin.seen() {

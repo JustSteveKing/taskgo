@@ -53,27 +53,125 @@ func (m model) View() string {
 // terminal and pushes the footer off the bottom. Views would rather be its
 // natural size, but on a short terminal it gives way and scrolls — adding a
 // view must never be able to break the layout.
+// sideColumn splits the available height between the three side panels.
+//
+// The heights must sum to exactly `height`, or the column overruns the
+// terminal and pushes the footer off the bottom. Each panel would rather be
+// its natural size; on a short terminal they give way in order of how much
+// they can afford to, and scroll. Adding a view or an agent must never be able
+// to break the layout.
 func (m model) sideColumn(height int) string {
 	const minPanel = 3
 
-	viewsHeight := len(views) + 2
-	if max := height - minPanel; viewsHeight > max {
-		viewsHeight = max
-	}
-	if viewsHeight < minPanel {
-		viewsHeight = minPanel
+	// Agents is sized to its contents and hidden entirely when nothing is
+	// connected — a permanently empty panel is a permanent question in the
+	// reader's mind, and most of the time no agent is running.
+	agentsHeight := 0
+	if len(m.agents) > 0 {
+		agentsHeight = len(m.agents) + 3 // rows, the "(all)" row, and borders
 	}
 
-	projectsHeight := height - viewsHeight
+	viewsHeight := len(views) + 2
+
+	// Trim, worst-affordable first, until everything fits.
+	for viewsHeight+agentsHeight+minPanel > height {
+		switch {
+		case agentsHeight > minPanel:
+			agentsHeight--
+		case viewsHeight > minPanel:
+			viewsHeight--
+		default:
+			agentsHeight = 0
+			viewsHeight = max(minPanel, height-minPanel)
+		}
+		if viewsHeight <= minPanel && agentsHeight == 0 {
+			break
+		}
+	}
+
+	projectsHeight := height - viewsHeight - agentsHeight
 	if projectsHeight < minPanel {
 		projectsHeight = minPanel
-		viewsHeight = height - projectsHeight
+		viewsHeight = max(minPanel, height-projectsHeight-agentsHeight)
+		projectsHeight = height - viewsHeight - agentsHeight
 	}
 
-	return lipgloss.JoinVertical(lipgloss.Left,
+	panels := []string{
 		box("1 Views", sideWidth, viewsHeight, m.focus == panelViews, m.viewsContent(viewsHeight-2)),
 		box("2 Projects", sideWidth, projectsHeight, m.focus == panelProjects, m.projectsContent(projectsHeight-2)),
-	)
+	}
+	if agentsHeight > 0 {
+		panels = append(panels, box(agentsTitle(len(m.agents)), sideWidth, agentsHeight,
+			m.focus == panelAgents, m.agentsContent(agentsHeight-2)))
+	}
+
+	return lipgloss.JoinVertical(lipgloss.Left, panels...)
+}
+
+func agentsTitle(n int) string {
+	if n == 1 {
+		return "3 Agents (1)"
+	}
+	return fmt.Sprintf("3 Agents (%d)", n)
+}
+
+// agentsContent lists connected agents, what each holds, and how long it has
+// been quiet. An idle agent is still worth showing: it is here, and it may be
+// waiting on you.
+func (m model) agentsContent(visible int) string {
+	if visible < 1 {
+		return ""
+	}
+	now := time.Now()
+
+	rows := make([]string, 0, len(m.agents)+1)
+	rows = append(rows, " (all)")
+
+	for _, sess := range m.agents {
+		holding := 0
+		for _, c := range m.claims {
+			if c.Session == sess.ID {
+				holding++
+			}
+		}
+
+		state := fmt.Sprintf("%d held", holding)
+		if holding == 0 {
+			state = "idle " + shortAge(sess.Idle(now))
+		}
+		name := truncate(sess.Name, sideWidth-len(state)-5)
+		rows = append(rows, fmt.Sprintf(" %s %s", pad(name, sideWidth-len(state)-4), state))
+	}
+
+	start := 0
+	if m.agentCursor >= visible {
+		start = m.agentCursor - visible + 1
+	}
+
+	var b strings.Builder
+	for i := start; i < len(rows) && i-start < visible; i++ {
+		switch {
+		case i == m.agentCursor:
+			b.WriteString(m.selectStyle(panelAgents).Render(pad(rows[i], sideWidth-2)))
+		case i == 0:
+			b.WriteString(styleDim.Render(rows[i]))
+		default:
+			b.WriteString(styleAgent.Render(rows[i]))
+		}
+		b.WriteString("\n")
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func shortAge(d time.Duration) string {
+	switch {
+	case d < time.Minute:
+		return "<1m"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	default:
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	}
 }
 
 func (m model) viewsContent(visible int) string {
@@ -151,7 +249,7 @@ func (m model) mainColumn(width, height int) string {
 		tasksHeight, detailHeight = 5, height-5
 	}
 
-	title := fmt.Sprintf("3 Tasks (%d)", len(m.tasks))
+	title := fmt.Sprintf("4 Tasks (%d)", len(m.tasks))
 	if m.filterVal != "" {
 		title += fmt.Sprintf(" /%s", m.filterVal)
 	}
@@ -459,6 +557,8 @@ func (m model) footer() string {
 		keys = [][2]string{{"j/k", "view"}, {"l", "tasks"}, {"tab", "panel"}}
 	case panelProjects:
 		keys = [][2]string{{"j/k", "project"}, {"l", "tasks"}, {"tab", "panel"}}
+	case panelAgents:
+		keys = [][2]string{{"j/k", "agent"}, {"l", "tasks"}, {"tab", "panel"}}
 	default:
 		keys = [][2]string{
 			{"j/k", "move"}, {"space", "done"}, {"a", "answer"}, {"n", "new"},
@@ -488,7 +588,7 @@ func (m model) helpView() string {
 		keys  [][2]string
 	}{
 		{"Panels", [][2]string{
-			{"1 / 2 / 3", "focus views, projects, tasks"},
+			{"1 / 2 / 3 / 4", "focus views, projects, agents, tasks"},
 			{"tab / shift+tab", "cycle panels"},
 			{"h / l", "move between side panels and tasks"},
 		}},

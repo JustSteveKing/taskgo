@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/JustSteveKing/taskgo/internal/agents"
 	"github.com/JustSteveKing/taskgo/internal/claim"
 	"github.com/JustSteveKing/taskgo/internal/store"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -21,7 +22,21 @@ func touch(s *store.Store, sess *sessions, req *mcp.CallToolRequest, taskID int)
 		return
 	}
 	id, agent := sess.identify(req.Session)
-	claim.Touch(s, taskID, agent, id, time.Now())
+	now := time.Now()
+	agents.Register(s, id, agent, now)
+	claim.Touch(s, taskID, agent, id, now)
+}
+
+// seen records that an agent is connected and active, without claiming
+// anything. Read-only tools call this: an agent listing tasks or checking for
+// an answer is present and worth showing, but is not working on anything in
+// particular.
+func seen(s *store.Store, sess *sessions, req *mcp.CallToolRequest) {
+	if req == nil {
+		return
+	}
+	id, agent := sess.identify(req.Session)
+	agents.Register(s, id, agent, time.Now())
 }
 
 type claimIn struct {
@@ -43,6 +58,8 @@ func registerClaimTools(srv *mcp.Server, s *store.Store, sess *sessions) {
 			"it is released automatically when you complete the task or your session ends, " +
 			"and expires on its own if neither happens. Call release_task if you stop early.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in claimIn) (*mcp.CallToolResult, claimOut, error) {
+		seen(s, sess, req)
+
 		if _, err := s.Get(in.ID); err != nil {
 			return nil, claimOut{}, err
 		}
@@ -64,6 +81,8 @@ func registerClaimTools(srv *mcp.Server, s *store.Store, sess *sessions) {
 		Description: "Give up a task you claimed without completing it, so it stops showing " +
 			"as being worked on.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in claimIn) (*mcp.CallToolResult, claimOut, error) {
+		seen(s, sess, req)
+
 		id, agent := sess.identify(req.Session)
 		if err := claim.Release(s, in.ID, id, time.Now()); err != nil {
 			return nil, claimOut{}, err
@@ -75,7 +94,8 @@ func registerClaimTools(srv *mcp.Server, s *store.Store, sess *sessions) {
 		Name: "list_claims",
 		Description: "Tasks currently being worked on by an agent, including you. Useful " +
 			"before starting work, to avoid duplicating what another agent is already doing.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, claimList, error) {
+	}, func(ctx context.Context, req *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, claimList, error) {
+		seen(s, sess, req)
 		now := time.Now()
 		set, err := claim.Load(s, now)
 		if err != nil {

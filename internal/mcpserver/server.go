@@ -36,9 +36,9 @@ func New(s *store.Store, version string) (*mcp.Server, *sessions) {
 	sess := newSessions()
 
 	registerTaskTools(srv, s, sess)
-	registerQueryTools(srv, s)
-	registerProjectTools(srv, s)
-	registerActivityTools(srv, s)
+	registerQueryTools(srv, s, sess)
+	registerProjectTools(srv, s, sess)
+	registerActivityTools(srv, s, sess)
 	registerClaimTools(srv, s, sess)
 	registerQuestionTools(srv, s, sess)
 
@@ -136,7 +136,8 @@ func registerTaskTools(srv *mcp.Server, s *store.Store, sess *sessions) {
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "get_task",
 		Description: "Fetch one task in full, including its notes body.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, in taskIDIn) (*mcp.CallToolResult, *store.Task, error) {
+	}, func(ctx context.Context, req *mcp.CallToolRequest, in taskIDIn) (*mcp.CallToolResult, *store.Task, error) {
+		seen(s, sess, req)
 		task, err := s.Get(in.ID)
 		if err != nil {
 			return nil, nil, err
@@ -248,13 +249,14 @@ type searchIn struct {
 	Query string `json:"query" jsonschema:"text to look for in titles and notes; required"`
 }
 
-func registerQueryTools(srv *mcp.Server, s *store.Store) {
+func registerQueryTools(srv *mcp.Server, s *store.Store, sess *sessions) {
 	mcp.AddTool(srv, &mcp.Tool{
 		Name: "list_tasks",
 		Description: "List tasks, newest commitments first. Completed tasks are omitted " +
 			"unless include_done is true. Returns index entries without notes bodies; " +
 			"call get_task for the full text of one task.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, in listTasksIn) (*mcp.CallToolResult, taskList, error) {
+	}, func(ctx context.Context, req *mcp.CallToolRequest, in listTasksIn) (*mcp.CallToolResult, taskList, error) {
+		seen(s, sess, req)
 		f := store.Filter{
 			Project:     in.Project,
 			Tag:         in.Tag,
@@ -279,7 +281,8 @@ func registerQueryTools(srv *mcp.Server, s *store.Store) {
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "search_tasks",
 		Description: "Full-text search across task titles and notes bodies.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, in searchIn) (*mcp.CallToolResult, taskList, error) {
+	}, func(ctx context.Context, req *mcp.CallToolRequest, in searchIn) (*mcp.CallToolResult, taskList, error) {
+		seen(s, sess, req)
 		entries, err := s.Search(in.Query)
 		if err != nil {
 			return nil, taskList{}, err
@@ -290,7 +293,8 @@ func registerQueryTools(srv *mcp.Server, s *store.Store) {
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "get_overdue",
 		Description: "Unfinished tasks whose due date has passed. Completed tasks are never overdue.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, taskList, error) {
+	}, func(ctx context.Context, req *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, taskList, error) {
+		seen(s, sess, req)
 		entries, err := s.Overdue(time.Now())
 		if err != nil {
 			return nil, taskList{}, err
@@ -302,7 +306,8 @@ func registerQueryTools(srv *mcp.Server, s *store.Store) {
 		Name: "get_today",
 		Description: "What is on today: unfinished tasks due today, plus anything already overdue. " +
 			"This is the tool to call when asked what needs doing now.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, taskList, error) {
+	}, func(ctx context.Context, req *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, taskList, error) {
+		seen(s, sess, req)
 		entries, err := s.Today(time.Now())
 		if err != nil {
 			return nil, taskList{}, err
@@ -323,11 +328,12 @@ type projectList struct {
 	Count    int                    `json:"count"`
 }
 
-func registerProjectTools(srv *mcp.Server, s *store.Store) {
+func registerProjectTools(srv *mcp.Server, s *store.Store, sess *sessions) {
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "list_projects",
 		Description: "List projects with their open and completed task counts.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, projectList, error) {
+	}, func(ctx context.Context, req *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, projectList, error) {
+		seen(s, sess, req)
 		projects, err := s.ListProjects()
 		if err != nil {
 			return nil, projectList{}, err
@@ -341,7 +347,8 @@ func registerProjectTools(srv *mcp.Server, s *store.Store) {
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "create_project",
 		Description: "Create a project. Tasks reference projects by name.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, in createProjectIn) (*mcp.CallToolResult, *store.Project, error) {
+	}, func(ctx context.Context, req *mcp.CallToolRequest, in createProjectIn) (*mcp.CallToolResult, *store.Project, error) {
+		seen(s, sess, req)
 		p, err := s.CreateProject(actor, in.Name, in.Description)
 		if err != nil {
 			return nil, nil, err
@@ -361,13 +368,14 @@ type activityList struct {
 	Count  int           `json:"count"`
 }
 
-func registerActivityTools(srv *mcp.Server, s *store.Store) {
+func registerActivityTools(srv *mcp.Server, s *store.Store, sess *sessions) {
 	mcp.AddTool(srv, &mcp.Tool{
 		Name: "get_activity",
 		Description: "Recent changes, newest first. Each entry records whether a human or " +
 			"an agent made the change, which is how you tell what the user did " +
 			"since you last looked.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, in activityIn) (*mcp.CallToolResult, activityList, error) {
+	}, func(ctx context.Context, req *mcp.CallToolRequest, in activityIn) (*mcp.CallToolResult, activityList, error) {
+		seen(s, sess, req)
 		limit := in.Limit
 		if limit == 0 {
 			// An agent asking for "recent activity" wants a readable window,

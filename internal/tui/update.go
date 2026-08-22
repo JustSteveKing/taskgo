@@ -20,7 +20,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.err = nil
-		m.tasks, m.projects, m.counts, m.claims = msg.tasks, msg.projects, msg.counts, msg.claims
+		m.tasks, m.projects, m.counts = msg.tasks, msg.projects, msg.counts
+		m.claims, m.agents = msg.claims, msg.agents
+		m.agentCursor = clamp(m.agentCursor, 0, len(m.agents))
 		m.taskCursor = clamp(m.taskCursor, 0, max(0, len(m.tasks)-1))
 		m.projectCursor = clamp(m.projectCursor, 0, len(m.projects))
 		return m, m.loadDetail()
@@ -178,6 +180,9 @@ func (m model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.focus = panelProjects
 		return m, nil
 	case "3":
+		m.focus = panelAgents
+		return m, nil
+	case "4":
 		m.focus = panelTasks
 		return m, nil
 	case "tab":
@@ -230,6 +235,10 @@ func (m model) move(delta int) (tea.Model, tea.Cmd) {
 		m.projectCursor = clamp(m.projectCursor+delta, 0, len(m.projects))
 		m.taskCursor = 0
 		return m, m.load()
+	case panelAgents:
+		m.agentCursor = clamp(m.agentCursor+delta, 0, len(m.agents))
+		m.taskCursor = 0
+		return m, m.load()
 	default:
 		m.taskCursor = clamp(m.taskCursor+delta, 0, max(0, len(m.tasks)-1))
 		return m, m.loadDetail()
@@ -244,6 +253,10 @@ func (m model) moveTo(pos int) (tea.Model, tea.Cmd) {
 		return m, m.load()
 	case panelProjects:
 		m.projectCursor = clamp(pos, 0, len(m.projects))
+		m.taskCursor = 0
+		return m, m.load()
+	case panelAgents:
+		m.agentCursor = clamp(pos, 0, len(m.agents))
 		m.taskCursor = 0
 		return m, m.load()
 	default:
