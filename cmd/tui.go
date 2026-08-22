@@ -5,7 +5,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func newTUICommand() *cobra.Command {
+func (a *app) newTUICommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "tui",
 		Short: "Browse and update tasks interactively",
@@ -15,7 +15,7 @@ It re-reads the store every couple of seconds while idle, so a task an agent
 creates over MCP appears without you doing anything.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			s, err := openStore()
+			s, err := a.openStore()
 			if err != nil {
 				return err
 			}

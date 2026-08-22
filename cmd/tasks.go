@@ -16,7 +16,7 @@ import (
 // store.ActorAgent instead; that difference is the whole audit trail.
 const cliActor = store.ActorHuman
 
-func newAddCommand() *cobra.Command {
+func (a *app) newAddCommand() *cobra.Command {
 	var (
 		notes    string
 		status   string
@@ -37,7 +37,7 @@ The title can be given as bare words, so quoting is optional:
   taskgo add Fix the login redirect --due tomorrow --tag auth`,
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			s, err := openStore()
+			s, err := a.openStore()
 			if err != nil {
 				return err
 			}
@@ -51,7 +51,7 @@ The title can be given as bare words, so quoting is optional:
 			}
 
 			if project == "" {
-				in.Project = cfg.DefaultProject
+				in.Project = a.cfg.DefaultProject
 			}
 			if status != "" {
 				if in.Status, err = store.ParseStatus(status); err != nil {
@@ -72,10 +72,10 @@ The title can be given as bare words, so quoting is optional:
 				return err
 			}
 
-			if jsonOut {
-				return emitJSON(os.Stdout, task)
+			if a.jsonOut {
+				return a.emitJSON(task)
 			}
-			fmt.Printf("Added #%d  %s\n", task.ID, task.Title)
+			a.printf("Added #%d  %s\n", task.ID, task.Title)
 			return nil
 		},
 	}
@@ -91,7 +91,7 @@ The title can be given as bare words, so quoting is optional:
 	return cmd
 }
 
-func newListCommand() *cobra.Command {
+func (a *app) newListCommand() *cobra.Command {
 	var (
 		project  string
 		status   string
@@ -115,7 +115,7 @@ question is "what is left", and having to filter that every time would be a
 poor default.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			s, err := openStore()
+			s, err := a.openStore()
 			if err != nil {
 				return err
 			}
@@ -150,13 +150,13 @@ poor default.`,
 				return err
 			}
 
-			if jsonOut {
+			if a.jsonOut {
 				if entries == nil {
 					entries = []store.IndexEntry{}
 				}
-				return emitJSON(os.Stdout, entries)
+				return a.emitJSON(entries)
 			}
-			renderTaskTable(os.Stdout, entries, now)
+			renderTaskTable(a.out, entries, now)
 			return nil
 		},
 	}
@@ -180,13 +180,13 @@ func resolveRef(s *store.Store, ref string) (int, error) {
 	return s.Resolve(ref)
 }
 
-func newDoneCommand() *cobra.Command {
+func (a *app) newDoneCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "done <id|title>",
 		Short: "Mark a task complete",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			s, err := openStore()
+			s, err := a.openStore()
 			if err != nil {
 				return err
 			}
@@ -199,22 +199,22 @@ func newDoneCommand() *cobra.Command {
 				return err
 			}
 
-			if jsonOut {
-				return emitJSON(os.Stdout, task)
+			if a.jsonOut {
+				return a.emitJSON(task)
 			}
-			fmt.Printf("Done #%d  %s\n", task.ID, task.Title)
+			a.printf("Done #%d  %s\n", task.ID, task.Title)
 			return nil
 		},
 	}
 }
 
-func newReopenCommand() *cobra.Command {
+func (a *app) newReopenCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "reopen <id|title>",
 		Short: "Move a completed task back to todo",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			s, err := openStore()
+			s, err := a.openStore()
 			if err != nil {
 				return err
 			}
@@ -227,22 +227,22 @@ func newReopenCommand() *cobra.Command {
 				return err
 			}
 
-			if jsonOut {
-				return emitJSON(os.Stdout, task)
+			if a.jsonOut {
+				return a.emitJSON(task)
 			}
-			fmt.Printf("Reopened #%d  %s\n", task.ID, task.Title)
+			a.printf("Reopened #%d  %s\n", task.ID, task.Title)
 			return nil
 		},
 	}
 }
 
-func newShowCommand() *cobra.Command {
+func (a *app) newShowCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "show <id|title>",
 		Short: "Show one task in full, notes included",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			s, err := openStore()
+			s, err := a.openStore()
 			if err != nil {
 				return err
 			}
@@ -255,16 +255,16 @@ func newShowCommand() *cobra.Command {
 				return err
 			}
 
-			if jsonOut {
-				return emitJSON(os.Stdout, task)
+			if a.jsonOut {
+				return a.emitJSON(task)
 			}
-			renderTask(os.Stdout, task, time.Now())
+			renderTask(a.out, task, time.Now())
 			return nil
 		},
 	}
 }
 
-func newEditCommand() *cobra.Command {
+func (a *app) newEditCommand() *cobra.Command {
 	var (
 		title    string
 		status   string
@@ -286,7 +286,7 @@ honest thing to do given the file is the real record. With flags it applies
 just those changes.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			s, err := openStore()
+			s, err := a.openStore()
 			if err != nil {
 				return err
 			}
@@ -302,7 +302,7 @@ just those changes.`,
 				flags.Changed("parent") || clearDue
 
 			if !anyFlag {
-				return editInEditor(s, id)
+				return a.editInEditor(s, id)
 			}
 
 			var up store.Update
@@ -348,10 +348,10 @@ just those changes.`,
 				return err
 			}
 
-			if jsonOut {
-				return emitJSON(os.Stdout, task)
+			if a.jsonOut {
+				return a.emitJSON(task)
 			}
-			fmt.Printf("Updated #%d  %s\n", task.ID, task.Title)
+			a.printf("Updated #%d  %s\n", task.ID, task.Title)
 			return nil
 		},
 	}
@@ -371,10 +371,10 @@ just those changes.`,
 // editInEditor opens the task file itself. After the editor exits the store is
 // reindexed, because the user may have changed indexed fields by hand — which
 // is exactly the workflow the plain-file design is meant to allow.
-func editInEditor(s *store.Store, id int) error {
+func (a *app) editInEditor(s *store.Store, id int) error {
 	path := filepath.Join(s.Root(), "tasks", fmt.Sprintf("%d.md", id))
 
-	editor := cfg.EditorCommand()
+	editor := a.cfg.EditorCommand()
 	c := exec.Command("sh", "-c", editor+" "+shellQuote(path))
 	c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
 	if err := c.Run(); err != nil {
@@ -384,7 +384,7 @@ func editInEditor(s *store.Store, id int) error {
 	if _, err := s.Reindex(); err != nil {
 		return fmt.Errorf("reindex after edit: %w", err)
 	}
-	fmt.Printf("Saved #%d\n", id)
+	a.printf("Saved #%d\n", id)
 	return nil
 }
 
@@ -392,13 +392,13 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
-func newNoteCommand() *cobra.Command {
+func (a *app) newNoteCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "note <id|title> <text>...",
 		Short: "Append a note to a task",
 		Args:  cobra.MinimumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			s, err := openStore()
+			s, err := a.openStore()
 			if err != nil {
 				return err
 			}
@@ -411,16 +411,16 @@ func newNoteCommand() *cobra.Command {
 				return err
 			}
 
-			if jsonOut {
-				return emitJSON(os.Stdout, task)
+			if a.jsonOut {
+				return a.emitJSON(task)
 			}
-			fmt.Printf("Noted on #%d\n", task.ID)
+			a.printf("Noted on #%d\n", task.ID)
 			return nil
 		},
 	}
 }
 
-func newDeleteCommand() *cobra.Command {
+func (a *app) newDeleteCommand() *cobra.Command {
 	var force bool
 
 	cmd := &cobra.Command{
@@ -429,7 +429,7 @@ func newDeleteCommand() *cobra.Command {
 		Short:   "Delete a task",
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			s, err := openStore()
+			s, err := a.openStore()
 			if err != nil {
 				return err
 			}
@@ -445,11 +445,11 @@ func newDeleteCommand() *cobra.Command {
 			// Deleting is the one destructive operation here, and unlike
 			// completing it cannot be undone from the CLI.
 			if !force {
-				fmt.Printf("Delete #%d %q? This cannot be undone. [y/N] ", task.ID, task.Title)
+				a.printf("Delete #%d %q? This cannot be undone. [y/N] ", task.ID, task.Title)
 				var answer string
 				_, _ = fmt.Scanln(&answer)
 				if !strings.EqualFold(strings.TrimSpace(answer), "y") {
-					fmt.Println("Left alone.")
+					a.printf("Left alone." + "\n")
 					return nil
 				}
 			}
@@ -457,7 +457,7 @@ func newDeleteCommand() *cobra.Command {
 			if err := s.Delete(cliActor, id); err != nil {
 				return err
 			}
-			fmt.Printf("Deleted #%d\n", id)
+			a.printf("Deleted #%d\n", id)
 			return nil
 		},
 	}

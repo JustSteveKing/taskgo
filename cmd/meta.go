@@ -2,20 +2,19 @@ package cmd
 
 import (
 	"fmt"
-	"os"
 	"time"
 
 	"github.com/JustSteveKing/taskgo/internal/store"
 	"github.com/spf13/cobra"
 )
 
-func newStatusCommand() *cobra.Command {
+func (a *app) newStatusCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "status",
 		Short: "A summary of where things stand",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			s, err := openStore()
+			s, err := a.openStore()
 			if err != nil {
 				return err
 			}
@@ -59,29 +58,29 @@ func newStatusCommand() *cobra.Command {
 				DataDir:  s.Root(),
 			}
 
-			if jsonOut {
-				return emitJSON(os.Stdout, summary)
+			if a.jsonOut {
+				return a.emitJSON(summary)
 			}
 
-			fmt.Printf("%d open of %d total\n", summary.Open, summary.Total)
+			a.printf("%d open of %d total\n", summary.Open, summary.Total)
 			for _, st := range []store.Status{store.StatusTodo, store.StatusDoing, store.StatusBlocked, store.StatusDone} {
 				if n := byStatus[st]; n > 0 {
-					fmt.Printf("  %-8s %d\n", st, n)
+					a.printf("  %-8s %d\n", st, n)
 				}
 			}
 			if summary.Overdue > 0 {
-				fmt.Printf("\n%d overdue\n", summary.Overdue)
+				a.printf("\n%d overdue\n", summary.Overdue)
 			}
 			if summary.Today > 0 {
-				fmt.Printf("%d due today or earlier\n", summary.Today)
+				a.printf("%d due today or earlier\n", summary.Today)
 			}
-			fmt.Printf("\ndata  %s\n", summary.DataDir)
+			a.printf("\ndata  %s\n", summary.DataDir)
 			return nil
 		},
 	}
 }
 
-func newActivityCommand() *cobra.Command {
+func (a *app) newActivityCommand() *cobra.Command {
 	var limit int
 
 	cmd := &cobra.Command{
@@ -93,7 +92,7 @@ Every entry records whether a human or an agent made the change. The log is
 append-only and is never rebuilt, so it survives 'taskgo reindex'.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			s, err := openStore()
+			s, err := a.openStore()
 			if err != nil {
 				return err
 			}
@@ -102,15 +101,15 @@ append-only and is never rebuilt, so it survives 'taskgo reindex'.`,
 				return err
 			}
 
-			if jsonOut {
+			if a.jsonOut {
 				if events == nil {
 					events = []store.Event{}
 				}
-				return emitJSON(os.Stdout, events)
+				return a.emitJSON(events)
 			}
 
 			if len(events) == 0 {
-				fmt.Println("Nothing yet.")
+				a.printf("Nothing yet." + "\n")
 				return nil
 			}
 			for _, e := range events {
@@ -121,7 +120,7 @@ append-only and is never rebuilt, so it survives 'taskgo reindex'.`,
 				if e.Detail != "" {
 					line += "  " + e.Detail
 				}
-				fmt.Println(line)
+				a.printf("%s\n", line)
 			}
 			return nil
 		},
@@ -131,13 +130,13 @@ append-only and is never rebuilt, so it survives 'taskgo reindex'.`,
 	return cmd
 }
 
-func newProjectsCommand() *cobra.Command {
+func (a *app) newProjectsCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "projects",
 		Short: "List projects",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			s, err := openStore()
+			s, err := a.openStore()
 			if err != nil {
 				return err
 			}
@@ -146,36 +145,36 @@ func newProjectsCommand() *cobra.Command {
 				return err
 			}
 
-			if jsonOut {
+			if a.jsonOut {
 				if projects == nil {
 					projects = []store.ProjectSummary{}
 				}
-				return emitJSON(os.Stdout, projects)
+				return a.emitJSON(projects)
 			}
 
 			if len(projects) == 0 {
-				fmt.Println("No projects. Create one with: taskgo projects new <name>")
+				a.printf("No projects. Create one with: taskgo projects new <name>" + "\n")
 				return nil
 			}
 			for _, p := range projects {
-				fmt.Printf("%-20s %d open", p.Name, p.Open)
+				a.printf("%-20s %d open", p.Name, p.Open)
 				if p.Done > 0 {
-					fmt.Printf(", %d done", p.Done)
+					a.printf(", %d done", p.Done)
 				}
 				if p.Description != "" {
-					fmt.Printf("  — %s", p.Description)
+					a.printf("  — %s", p.Description)
 				}
-				fmt.Println()
+				a.printf("\n")
 			}
 			return nil
 		},
 	}
 
-	cmd.AddCommand(newProjectNewCommand())
+	cmd.AddCommand(a.newProjectNewCommand())
 	return cmd
 }
 
-func newProjectNewCommand() *cobra.Command {
+func (a *app) newProjectNewCommand() *cobra.Command {
 	var description string
 
 	cmd := &cobra.Command{
@@ -183,7 +182,7 @@ func newProjectNewCommand() *cobra.Command {
 		Short: "Create a project",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			s, err := openStore()
+			s, err := a.openStore()
 			if err != nil {
 				return err
 			}
@@ -192,10 +191,10 @@ func newProjectNewCommand() *cobra.Command {
 				return err
 			}
 
-			if jsonOut {
-				return emitJSON(os.Stdout, p)
+			if a.jsonOut {
+				return a.emitJSON(p)
 			}
-			fmt.Printf("Created project %s\n", p.Name)
+			a.printf("Created project %s\n", p.Name)
 			return nil
 		},
 	}
@@ -204,7 +203,7 @@ func newProjectNewCommand() *cobra.Command {
 	return cmd
 }
 
-func newReindexCommand() *cobra.Command {
+func (a *app) newReindexCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "reindex",
 		Short: "Rebuild state.json from the Markdown files",
@@ -218,7 +217,7 @@ The activity log is not touched: it records things that happened and cannot be
 derived from current state.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			s, err := openStore()
+			s, err := a.openStore()
 			if err != nil {
 				return err
 			}
@@ -227,10 +226,10 @@ derived from current state.`,
 				return err
 			}
 
-			if jsonOut {
-				return emitJSON(os.Stdout, idx)
+			if a.jsonOut {
+				return a.emitJSON(idx)
 			}
-			fmt.Printf("Reindexed %d tasks.\n", len(idx.Tasks))
+			a.printf("Reindexed %d tasks.\n", len(idx.Tasks))
 			return nil
 		},
 	}

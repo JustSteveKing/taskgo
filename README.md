@@ -80,6 +80,8 @@ be able to destroy history.
 | `activity` | who changed what, and when |
 | `projects` / `projects new` | projects |
 | `reindex` | rebuild `state.json` from the Markdown |
+| `notify` | desktop notifications for due and overdue work |
+| `completion <shell>` | shell completion script |
 
 `<ref>` is an exact task id **or** a unique case-insensitive title substring.
 It is deliberately *not* an id prefix: with sequential ids `4` is both a
@@ -161,7 +163,47 @@ creates over MCP appears without you touching anything. It does **not** reload
 while you are typing a filter or reading a task — being two seconds stale beats
 having the list move under your cursor.
 
+## Notifications
+
+```bash
+taskgo notify --dry-run     # see what would be sent
+taskgo notify               # send it
+taskgo notify --print-timer # systemd user units, to install yourself
+```
+
+Each task is mentioned at most once a day, so a task that stays overdue does
+not produce an identical popup every hour — but one that becomes due later in
+the day still surfaces, because the record is kept per task rather than per
+run. That record lives in `notified.json`, which like the activity log is not
+derived from anything and so is never rebuilt.
+
+One notification per urgency, not one per task. Five popups for five late tasks
+is not five times as useful; it is how the whole mechanism gets muted.
+
+Needs `notify-send` (the `libnotify` package on Arch). If nothing appears,
+check whether Do Not Disturb is on — the notification is delivered either way
+and will be in your notification history.
+
+## Completions
+
+```bash
+taskgo completion bash > /etc/bash_completion.d/taskgo
+taskgo completion zsh  > "${fpath[1]}/_taskgo"
+taskgo completion fish > ~/.config/fish/completions/taskgo.fish
+```
+
+Completion is live against the store, not just a list of flag names:
+`taskgo done <TAB>` offers open tasks with their titles as descriptions, and
+`taskgo reopen <TAB>` offers only completed ones. `--project`, `--tag`,
+`--status`, `--priority` and `--due` all complete too.
+
 ## Status
 
-Storage, CLI, MCP server and TUI all work. Next: desktop notifications for due
-and overdue tasks, shell completions, and a release build.
+Storage, CLI, MCP server, TUI, notifications and completions all work. Next: a
+release build.
+
+Tested: `internal/store`, `internal/mcpserver`, `internal/notify` and `cmd`.
+The `cmd` tests drive the real command tree the way a user would, which is only
+safe because flag values live on a per-invocation struct rather than in
+package-level variables — otherwise one test's `--data-dir` would leak into the
+next. `internal/tui` and `internal/config` have no tests yet.

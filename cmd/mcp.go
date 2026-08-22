@@ -11,7 +11,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func newMCPCommand(version string) *cobra.Command {
+func (a *app) newMCPCommand(version string) *cobra.Command {
 	return &cobra.Command{
 		Use:   "mcp",
 		Short: "Run the MCP server on stdio",
@@ -27,7 +27,7 @@ lands in the same Markdown files the CLI reads — so a task an agent creates
 shows up in 'taskgo list' immediately.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			s, err := openStore()
+			s, err := a.openStore()
 			if err != nil {
 				return err
 			}

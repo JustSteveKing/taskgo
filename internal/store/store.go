@@ -111,6 +111,12 @@ func (s *Store) withWriteLock(fn func() error) error {
 	return fn()
 }
 
+// WriteFileAtomic is the exported form, for packages that keep their own file
+// in the taskgo directory and need the same durability guarantee.
+func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
+	return writeFileAtomic(path, data, perm)
+}
+
 // writeFileAtomic replaces path's contents in a way no reader can observe
 // half-done.
 //

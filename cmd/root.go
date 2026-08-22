@@ -8,6 +8,7 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/JustSteveKing/taskgo/internal/config"
@@ -15,22 +16,47 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var (
+// app carries the state a command tree needs.
+//
+// This is a struct rather than package-level variables so that each
+// NewRootCommand gets its own: package-level flag targets are shared mutable
+// state, which makes tests order-dependent and would leak one test's
+// --data-dir into the next.
+type app struct {
 	cfg     *config.Config
 	dataDir string
 	jsonOut bool
-)
 
-// openStore is used by every command that touches data.
-func openStore() (*store.Store, error) {
-	root := dataDir
+	out io.Writer
+	err io.Writer
+}
+
+func (a *app) openStore() (*store.Store, error) {
+	root := a.dataDir
 	if root == "" {
-		root = cfg.DataDir
+		if a.cfg == nil {
+			return nil, fmt.Errorf("configuration was not loaded")
+		}
+		root = a.cfg.DataDir
 	}
 	return store.Open(root)
 }
 
+// emitJSON is the single place JSON output is produced, so every command's
+// machine-readable form is shaped the same way.
+func (a *app) emitJSON(v any) error {
+	enc := json.NewEncoder(a.out)
+	enc.SetIndent("", "  ")
+	return enc.Encode(v)
+}
+
+func (a *app) printf(format string, args ...any) {
+	fmt.Fprintf(a.out, format, args...)
+}
+
 func NewRootCommand(version string) *cobra.Command {
+	a := &app{out: os.Stdout, err: os.Stderr}
+
 	root := &cobra.Command{
 		Use:   "taskgo",
 		Short: "Local-first tasks for humans and agents",
@@ -43,35 +69,42 @@ diff and edit by hand.`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			// Track cobra's streams so tests can capture output by setting
+			// SetOut/SetErr on the root command.
+			a.out = cmd.OutOrStdout()
+			a.err = cmd.ErrOrStderr()
+
 			loaded, err := config.Load()
 			if err != nil {
 				return err
 			}
-			cfg = loaded
+			a.cfg = loaded
 			return nil
 		},
 	}
 
-	root.PersistentFlags().StringVar(&dataDir, "data-dir", "", "override the taskgo data directory")
-	root.PersistentFlags().BoolVar(&jsonOut, "json", false, "emit JSON instead of text")
+	root.PersistentFlags().StringVar(&a.dataDir, "data-dir", "", "override the taskgo data directory")
+	root.PersistentFlags().BoolVar(&a.jsonOut, "json", false, "emit JSON instead of text")
 
 	root.AddCommand(
-		newAddCommand(),
-		newListCommand(),
-		newDoneCommand(),
-		newReopenCommand(),
-		newShowCommand(),
-		newEditCommand(),
-		newNoteCommand(),
-		newStatusCommand(),
-		newActivityCommand(),
-		newProjectsCommand(),
-		newReindexCommand(),
-		newDeleteCommand(),
-		newMCPCommand(version),
-		newTUICommand(),
+		a.newAddCommand(),
+		a.newListCommand(),
+		a.newDoneCommand(),
+		a.newReopenCommand(),
+		a.newShowCommand(),
+		a.newEditCommand(),
+		a.newNoteCommand(),
+		a.newStatusCommand(),
+		a.newActivityCommand(),
+		a.newProjectsCommand(),
+		a.newReindexCommand(),
+		a.newDeleteCommand(),
+		a.newNotifyCommand(),
+		a.newMCPCommand(version),
+		a.newTUICommand(),
 	)
 
+	a.registerCompletions(root)
 	return root
 }
 
@@ -80,12 +113,4 @@ func Execute(version string) {
 		fmt.Fprintln(os.Stderr, "taskgo: "+err.Error())
 		os.Exit(1)
 	}
-}
-
-// emitJSON is the single place JSON output is produced, so every command's
-// machine-readable form is shaped the same way.
-func emitJSON(w *os.File, v any) error {
-	enc := json.NewEncoder(w)
-	enc.SetIndent("", "  ")
-	return enc.Encode(v)
 }
