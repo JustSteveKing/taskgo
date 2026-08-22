@@ -20,6 +20,8 @@ type Filter struct {
 	DueOn       *DueDate
 	IncludeDone bool
 	Text        string
+	// NeedsInput narrows to tasks where an agent is waiting on a human.
+	NeedsInput bool
 }
 
 // List returns index entries matching the filter, ordered the way a person
@@ -80,12 +82,21 @@ func (f Filter) matches(e IndexEntry) bool {
 	if f.Text != "" && !strings.Contains(strings.ToLower(e.Title), strings.ToLower(f.Text)) {
 		return false
 	}
+	if f.NeedsInput && e.Question == "" {
+		return false
+	}
 	return true
 }
 
 func sortEntries(entries []IndexEntry) {
 	sort.SliceStable(entries, func(i, j int) bool {
 		a, b := entries[i], entries[j]
+
+		// A task waiting on you outranks everything: an agent has stopped and
+		// is not going to start again until you look.
+		if (a.Question != "") != (b.Question != "") {
+			return a.Question != ""
+		}
 
 		// Anything with a due date outranks anything without one: a dated task
 		// is a commitment, an undated one is a wish.
@@ -225,4 +236,9 @@ func (s *Store) Resolve(ref string) (int, error) {
 		b.WriteString("give the id instead")
 		return 0, fmt.Errorf("%s", b.String())
 	}
+}
+
+// Waiting returns tasks where an agent has asked a question and stopped.
+func (s *Store) Waiting() ([]IndexEntry, error) {
+	return s.List(Filter{NeedsInput: true, IncludeDone: true})
 }

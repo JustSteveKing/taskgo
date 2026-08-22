@@ -30,6 +30,8 @@ const (
 	ActionDelete        Action = "delete"
 	ActionNote          Action = "note"
 	ActionProjectCreate Action = "project_create"
+	ActionAsk           Action = "ask"
+	ActionAnswer        Action = "answer"
 )
 
 // Event is one line of activity.jsonl.

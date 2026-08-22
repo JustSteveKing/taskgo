@@ -101,6 +101,7 @@ func (a *app) newListCommand() *cobra.Command {
 		all      bool
 		overdue  bool
 		today    bool
+		waiting  bool
 		search   string
 		parentID int
 	)
@@ -130,6 +131,8 @@ poor default.`,
 				entries, err = s.Overdue(now)
 			case today:
 				entries, err = s.Today(now)
+			case waiting:
+				entries, err = s.Waiting()
 			default:
 				f := store.Filter{Project: project, Tag: tag, IncludeDone: all}
 				if status != "" {
@@ -177,6 +180,7 @@ poor default.`,
 	cmd.Flags().BoolVarP(&all, "all", "a", false, "include completed tasks")
 	cmd.Flags().BoolVar(&overdue, "overdue", false, "only overdue tasks")
 	cmd.Flags().BoolVar(&today, "today", false, "due today, plus anything already overdue")
+	cmd.Flags().BoolVar(&waiting, "waiting", false, "only tasks where an agent is waiting on you")
 	cmd.Flags().StringVar(&search, "search", "", "full-text search across titles and notes")
 	cmd.Flags().IntVar(&parentID, "parent", 0, "only subtasks of this task (0 for top-level)")
 

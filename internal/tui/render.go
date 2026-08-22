@@ -47,33 +47,60 @@ func (m model) View() string {
 
 // ------------------------------------------------------------- side column
 
+// sideColumn splits the available height between the two side panels.
+//
+// The two heights must sum to exactly `height`, or the column overruns the
+// terminal and pushes the footer off the bottom. Views would rather be its
+// natural size, but on a short terminal it gives way and scrolls — adding a
+// view must never be able to break the layout.
 func (m model) sideColumn(height int) string {
+	const minPanel = 3
+
 	viewsHeight := len(views) + 2
+	if max := height - minPanel; viewsHeight > max {
+		viewsHeight = max
+	}
+	if viewsHeight < minPanel {
+		viewsHeight = minPanel
+	}
+
 	projectsHeight := height - viewsHeight
-	if projectsHeight < 5 {
-		projectsHeight = 5
+	if projectsHeight < minPanel {
+		projectsHeight = minPanel
+		viewsHeight = height - projectsHeight
 	}
 
 	return lipgloss.JoinVertical(lipgloss.Left,
-		box("1 Views", sideWidth, viewsHeight, m.focus == panelViews, m.viewsContent()),
+		box("1 Views", sideWidth, viewsHeight, m.focus == panelViews, m.viewsContent(viewsHeight-2)),
 		box("2 Projects", sideWidth, projectsHeight, m.focus == panelProjects, m.projectsContent(projectsHeight-2)),
 	)
 }
 
-func (m model) viewsContent() string {
+func (m model) viewsContent(visible int) string {
+	if visible < 1 {
+		return ""
+	}
+
+	start := 0
+	if m.viewCursor >= visible {
+		start = m.viewCursor - visible + 1
+	}
+
 	var b strings.Builder
-	for i, v := range views {
-		line := " " + v.name
+	for i := start; i < len(views) && i-start < visible; i++ {
+		line := " " + views[i].name
 		if i == m.viewCursor {
 			b.WriteString(m.selectStyle(panelViews).Render(pad(line, sideWidth-2)))
+		} else if views[i].filter.NeedsInput {
+			// The one view that is about something being stuck stays visible
+			// as such even when it is not selected.
+			b.WriteString(styleWaiting.Render(line))
 		} else {
 			b.WriteString(line)
 		}
-		if i < len(views)-1 {
-			b.WriteString("\n")
-		}
+		b.WriteString("\n")
 	}
-	return b.String()
+	return strings.TrimRight(b.String(), "\n")
 }
 
 func (m model) projectsContent(visible int) string {
@@ -158,13 +185,19 @@ func (m model) tasksContent(width, visible int) string {
 }
 
 func (m model) taskRow(e store.IndexEntry, selected bool, width int, now time.Time) string {
+	waiting := e.Question != ""
+
 	mark := " "
-	switch e.Status {
-	case store.StatusDone:
+	switch {
+	case waiting:
+		// Takes the status column outright: nothing is progressing on a task
+		// an agent has stopped and asked about.
+		mark = "?"
+	case e.Status == store.StatusDone:
 		mark = "✓"
-	case store.StatusDoing:
+	case e.Status == store.StatusDoing:
 		mark = "▸"
-	case store.StatusBlocked:
+	case e.Status == store.StatusBlocked:
 		mark = "✗"
 	}
 
@@ -212,6 +245,8 @@ func (m model) taskRow(e store.IndexEntry, selected bool, width int, now time.Ti
 
 	title := e.Title
 	switch {
+	case waiting:
+		title = styleWaiting.Render(title)
 	case e.Status == store.StatusDone:
 		title = styleDoneText.Render(title)
 	case agentHeld:
@@ -225,7 +260,11 @@ func (m model) taskRow(e store.IndexEntry, selected bool, width int, now time.Ti
 	if agentHeld {
 		glyph = styleAgent.Render("◆")
 	}
-	line := fmt.Sprintf(" %s%s %s %-4d %s", glyph, priorityGlyph(e.Priority), markStyled(e.Status, mark), e.ID, title)
+	statusGlyph := markStyled(e.Status, mark)
+	if waiting {
+		statusGlyph = styleWaiting.Render(mark)
+	}
+	line := fmt.Sprintf(" %s%s %s %-4d %s", glyph, priorityGlyph(e.Priority), statusGlyph, e.ID, title)
 	if len(styled) > 0 {
 		line += "  " + strings.Join(styled, " ")
 	}
@@ -338,6 +377,20 @@ func (m model) detailContent(width, height int) string {
 	}
 	b.WriteString(" " + styleDim.Render(strings.Join(meta, " · ")) + "\n")
 
+	if t.AwaitingAnswer() {
+		asker := t.AskedBy
+		if asker == "" {
+			asker = "an agent"
+		}
+		b.WriteString("\n " + styleWaiting.Render("? "+asker+" is waiting on you:") + "\n")
+		for _, line := range wrapText(t.Question, width-3) {
+			b.WriteString("   " + styleWaitingText.Render(line) + "\n")
+		}
+		b.WriteString(" " + styleDim.Render("press a to answer") + "\n")
+	} else if t.Answer != "" {
+		b.WriteString("\n " + styleDim.Render("last answer: ") + truncate(t.Answer, width-15) + "\n")
+	}
+
 	if held, ok := m.claims.Get(t.ID); ok {
 		kind := "working on this"
 		if !held.Explicit {
@@ -372,6 +425,9 @@ func (m model) statusLine() string {
 	if m.mode == modeFilter || m.mode == modeNew {
 		return " " + m.input.View()
 	}
+	if m.mode == modeAnswer {
+		return " " + m.input.View()
+	}
 	if m.mode == modeConfirmDelete {
 		entry, _ := m.currentTask()
 		return styleUrgent.Render(fmt.Sprintf(" Delete #%d %q? [y/N]", entry.ID, entry.Title))
@@ -386,6 +442,9 @@ func (m model) statusLine() string {
 	}
 	if m.counts.today > 0 {
 		parts = append(parts, styleWarn.Render(fmt.Sprintf("%d today", m.counts.today)))
+	}
+	if m.counts.waiting > 0 {
+		parts = append(parts, styleWaiting.Render(fmt.Sprintf("%d waiting on you", m.counts.waiting)))
 	}
 	return " " + styleDim.Render(strings.Join(parts, " · "))
 }
@@ -402,8 +461,8 @@ func (m model) footer() string {
 		keys = [][2]string{{"j/k", "project"}, {"l", "tasks"}, {"tab", "panel"}}
 	default:
 		keys = [][2]string{
-			{"j/k", "move"}, {"space", "done"}, {"n", "new"}, {"e", "edit"},
-			{"s", "status"}, {"p", "priority"}, {"/", "filter"}, {"d", "delete"},
+			{"j/k", "move"}, {"space", "done"}, {"a", "answer"}, {"n", "new"},
+			{"e", "edit"}, {"s", "status"}, {"p", "priority"}, {"/", "filter"},
 		}
 	}
 	keys = append(keys, [2]string{"?", "help"}, [2]string{"q", "quit"})
@@ -440,6 +499,7 @@ func (m model) helpView() string {
 		}},
 		{"Tasks", [][2]string{
 			{"space", "complete or reopen"},
+			{"a", "answer an agent's question"},
 			{"s", "cycle status (todo → doing → blocked)"},
 			{"p", "cycle priority"},
 			{"n", "new task, in the selected project"},
@@ -492,4 +552,33 @@ func humanDuration(d time.Duration) string {
 	default:
 		return fmt.Sprintf("for %dh%02dm", int(d.Hours()), int(d.Minutes())%60)
 	}
+}
+
+// wrapText breaks a question across the detail pane's width. A question is the
+// one thing here worth showing in full rather than eliding — a truncated
+// question cannot be answered.
+func wrapText(text string, width int) []string {
+	if width < 10 {
+		width = 10
+	}
+
+	var lines []string
+	for _, para := range strings.Split(text, "\n") {
+		words := strings.Fields(para)
+		if len(words) == 0 {
+			lines = append(lines, "")
+			continue
+		}
+		line := words[0]
+		for _, w := range words[1:] {
+			if lipgloss.Width(line)+1+lipgloss.Width(w) > width {
+				lines = append(lines, line)
+				line = w
+				continue
+			}
+			line += " " + w
+		}
+		lines = append(lines, line)
+	}
+	return lines
 }

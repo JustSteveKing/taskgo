@@ -189,9 +189,27 @@ type Task struct {
 	Created  time.Time `yaml:"created" json:"created"`
 	Updated  time.Time `yaml:"updated" json:"updated"`
 
+	// Question is set when an agent is stuck on something only a human can
+	// decide, and cleared when it is answered. A task carrying one is waiting
+	// on you regardless of its status — the agent has stopped.
+	//
+	// The pending question lives in frontmatter so it is queryable without
+	// opening every file, while the full exchange is appended to the notes
+	// body, which is where the durable record of what happened belongs.
+	Question string    `yaml:"question,omitempty" json:"question,omitempty"`
+	AskedBy  string    `yaml:"asked_by,omitempty" json:"askedBy,omitempty"`
+	AskedAt  time.Time `yaml:"asked_at,omitempty" json:"askedAt,omitempty"`
+	// Answer holds the most recent reply, so an agent can read it directly
+	// rather than parsing it back out of the notes.
+	Answer     string    `yaml:"answer,omitempty" json:"answer,omitempty"`
+	AnsweredAt time.Time `yaml:"answered_at,omitempty" json:"answeredAt,omitempty"`
+
 	// Notes is the Markdown body, not frontmatter.
 	Notes string `yaml:"-" json:"notes,omitempty"`
 }
+
+// AwaitingAnswer reports whether an agent is blocked on a human decision.
+func (t *Task) AwaitingAnswer() bool { return t.Question != "" }
 
 func (t *Task) HasTag(tag string) bool {
 	for _, existing := range t.Tags {

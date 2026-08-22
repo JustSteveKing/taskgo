@@ -40,6 +40,7 @@ func New(s *store.Store, version string) (*mcp.Server, *sessions) {
 	registerProjectTools(srv, s)
 	registerActivityTools(srv, s)
 	registerClaimTools(srv, s, sess)
+	registerQuestionTools(srv, s, sess)
 
 	return srv, sess
 }

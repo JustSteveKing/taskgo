@@ -12,6 +12,16 @@ import (
 
 // statusMark is a one-glyph status column. Plain ASCII: this output gets piped
 // into other tools and read over SSH.
+// waitingMark flags a task an agent has stopped on. It takes the status
+// column because "an agent is stuck on this" outranks "this is in progress" —
+// nothing is progressing until you answer.
+func waitingMark(e store.IndexEntry) string {
+	if e.Question != "" {
+		return "?"
+	}
+	return statusMark(e.Status)
+}
+
 func statusMark(s store.Status) string {
 	switch s {
 	case store.StatusDone:
@@ -86,7 +96,7 @@ func renderTaskTableWithClaims(w io.Writer, entries []store.IndexEntry, claims m
 	for _, e := range entries {
 		fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\t%s\t%s",
 			e.ID,
-			statusMark(e.Status),
+			waitingMark(e),
 			priorityMark(e.Priority),
 			e.Title,
 			e.Project,

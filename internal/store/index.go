@@ -35,6 +35,10 @@ type IndexEntry struct {
 	Project  string   `json:"project,omitempty"`
 	Tags     []string `json:"tags,omitempty"`
 	Parent   int      `json:"parent,omitempty"`
+	// Question is carried in the index so a listing can show what is waiting
+	// on you without opening every task file.
+	Question string `json:"question,omitempty"`
+	AskedBy  string `json:"askedBy,omitempty"`
 }
 
 func entryFor(t *Task) IndexEntry {
@@ -47,6 +51,8 @@ func entryFor(t *Task) IndexEntry {
 		Project:  t.Project,
 		Tags:     t.Tags,
 		Parent:   t.Parent,
+		Question: t.Question,
+		AskedBy:  t.AskedBy,
 	}
 }
 

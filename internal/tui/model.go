@@ -62,6 +62,7 @@ const (
 	modeFilter
 	modeNew
 	modeConfirmDelete
+	modeAnswer
 	modeHelp
 )
 
@@ -76,6 +77,9 @@ type view struct {
 
 var views = []view{
 	{name: "All", filter: store.Filter{}},
+	// First after All, because a task waiting on you is the one thing here
+	// that has actually stopped.
+	{name: "Needs you", filter: store.Filter{NeedsInput: true, IncludeDone: true}},
 	{name: "Today", special: "today"},
 	{name: "Overdue", special: "overdue"},
 	{name: "Doing", filter: store.Filter{Status: store.StatusDoing}},
@@ -113,7 +117,7 @@ type model struct {
 }
 
 type summary struct {
-	total, open, overdue, today int
+	total, open, overdue, today, waiting int
 }
 
 // ------------------------------------------------------------------ messages
@@ -227,10 +231,13 @@ func (m model) load() tea.Cmd {
 			return loadedMsg{err: err}
 		}
 
-		open := 0
+		open, waiting := 0, 0
 		for _, t := range all {
 			if t.Status != store.StatusDone {
 				open++
+			}
+			if t.Question != "" {
+				waiting++
 			}
 		}
 
@@ -242,7 +249,7 @@ func (m model) load() tea.Cmd {
 			tasks:    tasks,
 			projects: projects,
 			claims:   claims,
-			counts:   summary{total: len(all), open: open, overdue: len(overdue), today: len(today)},
+			counts:   summary{total: len(all), open: open, overdue: len(overdue), today: len(today), waiting: waiting},
 		}
 	}
 }

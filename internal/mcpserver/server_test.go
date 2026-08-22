@@ -506,3 +506,113 @@ func TestClaimingAMissingTaskFails(t *testing.T) {
 		t.Errorf("error = %q", msg)
 	}
 }
+
+// ------------------------------------------------------------- questions
+
+// ask_human must not block. An agent that sat in a tool call waiting for a
+// person to look at their screen would be useless.
+func TestAskHumanReturnsImmediatelyAndFlagsTheTask(t *testing.T) {
+	cs, s := connect(t)
+
+	var created store.Task
+	call(t, cs, "create_task", map[string]any{"title": "Decide something"}, &created)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		call(t, cs, "ask_human", map[string]any{
+			"id": created.ID, "question": "JWTs or session cookies?",
+		}, nil)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("ask_human blocked; it must return without waiting for a human")
+	}
+
+	task, err := s.Get(created.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if !task.AwaitingAnswer() {
+		t.Error("task is not flagged as waiting")
+	}
+	if task.AskedBy != "test-client" {
+		t.Errorf("AskedBy = %q, want the client's declared identity", task.AskedBy)
+	}
+}
+
+// The loop that matters: agent asks, human answers out of band, agent polls
+// and gets on with it.
+func TestAgentSeesTheHumansAnswerOnItsNextCheck(t *testing.T) {
+	cs, s := connect(t)
+
+	var created store.Task
+	call(t, cs, "create_task", map[string]any{"title": "Blocked on a decision"}, &created)
+	call(t, cs, "ask_human", map[string]any{"id": created.ID, "question": "which?"}, nil)
+
+	var pending answerOut
+	call(t, cs, "check_answer", map[string]any{"id": created.ID}, &pending)
+	if pending.Answered {
+		t.Fatal("check_answer said answered before anyone answered")
+	}
+
+	if _, err := s.Answer(store.ActorHuman, created.ID, "the second one"); err != nil {
+		t.Fatalf("Answer: %v", err)
+	}
+
+	var replied answerOut
+	call(t, cs, "check_answer", map[string]any{"id": created.ID}, &replied)
+	if !replied.Answered || replied.Answer != "the second one" {
+		t.Errorf("agent did not see the answer: %+v", replied)
+	}
+}
+
+func TestListQuestionsShowsWhatIsWaiting(t *testing.T) {
+	cs, _ := connect(t)
+
+	var a, b store.Task
+	call(t, cs, "create_task", map[string]any{"title": "One"}, &a)
+	call(t, cs, "create_task", map[string]any{"title": "Two"}, &b)
+	call(t, cs, "ask_human", map[string]any{"id": a.ID, "question": "eh?"}, nil)
+
+	var listed questionList
+	call(t, cs, "list_questions", map[string]any{}, &listed)
+	if listed.Count != 1 {
+		t.Fatalf("got %d questions, want 1: %+v", listed.Count, listed.Questions)
+	}
+	if listed.Questions[0].Task != a.ID || listed.Questions[0].AskedBy != "test-client" {
+		t.Errorf("question = %+v", listed.Questions[0])
+	}
+}
+
+// Asking holds the lease, so a task waiting on a human does not also look
+// abandoned.
+func TestAskingHoldsTheClaim(t *testing.T) {
+	cs, s := connect(t)
+
+	var created store.Task
+	call(t, cs, "create_task", map[string]any{"title": "Ask and hold"}, &created)
+	call(t, cs, "ask_human", map[string]any{"id": created.ID, "question": "hmm?"}, nil)
+
+	set, _ := claim.Load(s, time.Now())
+	if _, ok := set.Get(created.ID); !ok {
+		t.Error("asking should keep the task claimed")
+	}
+}
+
+// There is deliberately no tool for an agent to answer its own question.
+func TestAgentsCannotAnswerThemselves(t *testing.T) {
+	cs, _ := connect(t)
+
+	res, err := cs.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	for _, tool := range res.Tools {
+		if tool.Name == "answer_question" || tool.Name == "answer" {
+			t.Errorf("tool %q lets an agent answer its own question, defeating the point of asking", tool.Name)
+		}
+	}
+}

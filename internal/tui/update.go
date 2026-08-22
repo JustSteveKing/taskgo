@@ -73,7 +73,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch m.mode {
-	case modeFilter, modeNew:
+	case modeFilter, modeNew, modeAnswer:
 		return m.handleInputKey(msg)
 	case modeConfirmDelete:
 		return m.handleConfirmKey(msg)
@@ -100,6 +100,21 @@ func (m model) handleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 		if value == "" {
 			return m, nil
+		}
+
+		if mode == modeAnswer {
+			entry, ok := m.currentTask()
+			if !ok {
+				return m, nil
+			}
+			s := m.store
+			id := entry.ID
+			return m, func() tea.Msg {
+				if _, err := s.Answer(store.ActorHuman, id, value); err != nil {
+					return statusMsg{text: err.Error(), isErr: true}
+				}
+				return statusMsg{text: fmt.Sprintf("answered #%d", id)}
+			}
 		}
 		s := m.store
 		project := m.selectedProject()
@@ -252,6 +267,18 @@ func (m model) handleTaskKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.mode = modeNew
 		m.input.Placeholder = "new task title…"
 		m.input.Prompt = "> "
+		m.input.SetValue("")
+		m.input.Focus()
+		return m, textinput.Blink
+
+	case "a":
+		entry, ok := m.currentTask()
+		if !ok || entry.Question == "" {
+			return m, flash("nothing is waiting on you here", false)
+		}
+		m.mode = modeAnswer
+		m.input.Placeholder = "your answer…"
+		m.input.Prompt = "answer: "
 		m.input.SetValue("")
 		m.input.Focus()
 		return m, textinput.Blink

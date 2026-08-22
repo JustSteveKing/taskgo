@@ -53,3 +53,21 @@ func TestViewFitsTerminal(t *testing.T) {
 		}
 	}
 }
+
+// Adding a view must never be able to push the layout off the bottom. This is
+// the regression that adding "Needs you" caused: the side column insisted on
+// its natural height and overran a 15-row terminal by a line.
+func TestSideColumnFitsWhateverTheViewCountIs(t *testing.T) {
+	s, _ := store.Open(t.TempDir())
+
+	for _, height := range []int{10, 12, 15, 20, 40} {
+		m := New(s, "test")
+		m.width, m.height = 100, height
+
+		body := height - 2
+		side := m.sideColumn(body)
+		if got := len(strings.Split(side, "\n")); got != body {
+			t.Errorf("height %d: side column is %d lines, want %d", height, got, body)
+		}
+	}
+}

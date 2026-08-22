@@ -30,6 +30,10 @@ var (
 	styleProject  = lipgloss.NewStyle().Foreground(colProj)
 	styleDoneText = lipgloss.NewStyle().Foreground(colDim).Strikethrough(true)
 	styleAgent    = lipgloss.NewStyle().Foreground(colAgent).Bold(true)
+	// Waiting-on-you is the loudest state in the interface, because it is the
+	// only one where work has actually stopped.
+	styleWaiting     = lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Bold(true)
+	styleWaitingText = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
 
 	// The selection bar. Rows under it are rendered as plain text and styled
 	// once, because a colour reset mid-line would punch a hole in the bar.

@@ -101,6 +101,8 @@ diff and edit by hand.`,
 		a.newDeleteCommand(),
 		a.newNotifyCommand(),
 		a.newClaimsCommand(),
+		a.newQuestionsCommand(),
+		a.newAnswerCommand(),
 		a.newMCPCommand(version),
 		a.newTUICommand(version),
 	)

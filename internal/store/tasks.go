@@ -386,3 +386,129 @@ func firstLine(s string) string {
 	}
 	return s
 }
+
+// Ask records a question an agent needs a human to answer.
+//
+// It does not block. The agent asks and moves on; the human sees the task
+// marked as waiting and answers when they get to it. Anything else would mean
+// an agent sitting in a tool call for however long it takes a person to look
+// at their screen.
+func (s *Store) Ask(actor Actor, id int, asker, question string) (*Task, error) {
+	question = strings.TrimSpace(question)
+	if question == "" {
+		return nil, errors.New("a question needs text")
+	}
+
+	var result *Task
+
+	err := s.withWriteLock(func() error {
+		t, err := s.Get(id)
+		if err != nil {
+			return err
+		}
+
+		now := s.now().UTC().Truncate(time.Second)
+		t.Question = question
+		t.AskedBy = strings.TrimSpace(asker)
+		t.AskedAt = now
+		// A new question supersedes any previous answer, so a stale one cannot
+		// be mistaken for a reply to this.
+		t.Answer = ""
+		t.AnsweredAt = time.Time{}
+		t.Updated = now
+
+		t.appendExchange(fmt.Sprintf("**Question** — %s\n\n%s", displayActor(t.AskedBy, actor), question))
+
+		if err := s.writeTask(t); err != nil {
+			return err
+		}
+
+		idx, err := s.readIndex()
+		if err != nil {
+			return err
+		}
+		idx.upsert(t)
+		if err := s.writeIndex(idx); err != nil {
+			return err
+		}
+
+		result = t
+		return s.appendEvent(Event{
+			Actor: actor, Action: ActionAsk, Task: t.ID,
+			Project: t.Project, Detail: firstLine(question),
+		})
+	})
+
+	return result, err
+}
+
+// Answer replies to a pending question and clears the waiting state.
+func (s *Store) Answer(actor Actor, id int, answer string) (*Task, error) {
+	answer = strings.TrimSpace(answer)
+	if answer == "" {
+		return nil, errors.New("an answer needs text")
+	}
+
+	var result *Task
+
+	err := s.withWriteLock(func() error {
+		t, err := s.Get(id)
+		if err != nil {
+			return err
+		}
+		if !t.AwaitingAnswer() {
+			return fmt.Errorf("task %d is not waiting on an answer", id)
+		}
+
+		now := s.now().UTC().Truncate(time.Second)
+		asked := t.Question
+
+		t.Answer = answer
+		t.AnsweredAt = now
+		t.Question = ""
+		t.AskedBy = ""
+		t.AskedAt = time.Time{}
+		t.Updated = now
+
+		t.appendExchange(fmt.Sprintf("**Answer** — %s\n\n%s", actor, answer))
+
+		if err := s.writeTask(t); err != nil {
+			return err
+		}
+
+		idx, err := s.readIndex()
+		if err != nil {
+			return err
+		}
+		idx.upsert(t)
+		if err := s.writeIndex(idx); err != nil {
+			return err
+		}
+
+		result = t
+		return s.appendEvent(Event{
+			Actor: actor, Action: ActionAnswer, Task: t.ID,
+			Project: t.Project, Detail: firstLine(asked),
+		})
+	})
+
+	return result, err
+}
+
+// appendExchange adds a timestamped block to the notes body, so the Markdown
+// keeps the whole conversation even though only the pending question lives in
+// frontmatter.
+func (t *Task) appendExchange(block string) {
+	if t.Notes == "" {
+		t.Notes = block
+		return
+	}
+	t.Notes = t.Notes + "\n\n" + block
+}
+
+func displayActor(asker string, actor Actor) string {
+	if asker != "" {
+		return asker
+	}
+	return string(actor)
+}

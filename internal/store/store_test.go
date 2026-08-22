@@ -488,3 +488,126 @@ func ptrDue(s string) *DueDate {
 	d := DueDate(s)
 	return &d
 }
+
+func TestAskAndAnswerRoundTrip(t *testing.T) {
+	s := newTestStore(t)
+	task, err := s.Create(ActorHuman, NewTask{Title: "Decide the auth model"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	asked, err := s.Ask(ActorAgent, task.ID, "claude-code", "JWTs or session cookies?")
+	if err != nil {
+		t.Fatalf("Ask: %v", err)
+	}
+	if !asked.AwaitingAnswer() {
+		t.Fatal("task should be waiting after Ask")
+	}
+	if asked.AskedBy != "claude-code" {
+		t.Errorf("AskedBy = %q", asked.AskedBy)
+	}
+
+	answered, err := s.Answer(ActorHuman, task.ID, "Session cookies.")
+	if err != nil {
+		t.Fatalf("Answer: %v", err)
+	}
+	if answered.AwaitingAnswer() {
+		t.Error("task should no longer be waiting")
+	}
+	if answered.Answer != "Session cookies." {
+		t.Errorf("Answer = %q", answered.Answer)
+	}
+
+	// The whole exchange belongs in the Markdown, not just the outcome.
+	for _, want := range []string{"JWTs or session cookies?", "Session cookies.", "**Question**", "**Answer**"} {
+		if !strings.Contains(answered.Notes, want) {
+			t.Errorf("notes missing %q:\n%s", want, answered.Notes)
+		}
+	}
+}
+
+func TestAnsweringSomethingNobodyAskedFails(t *testing.T) {
+	s := newTestStore(t)
+	task, err := s.Create(ActorHuman, NewTask{Title: "Nothing pending"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := s.Answer(ActorHuman, task.ID, "an answer"); err == nil {
+		t.Error("expected an error answering a task with no question")
+	}
+}
+
+// A new question must not leave the previous answer lying around, or an agent
+// polling could read a stale reply as the response to what it just asked.
+func TestNewQuestionClearsThePreviousAnswer(t *testing.T) {
+	s := newTestStore(t)
+	task, _ := s.Create(ActorHuman, NewTask{Title: "Twice asked"})
+
+	if _, err := s.Ask(ActorAgent, task.ID, "agent", "first?"); err != nil {
+		t.Fatalf("Ask: %v", err)
+	}
+	if _, err := s.Answer(ActorHuman, task.ID, "first answer"); err != nil {
+		t.Fatalf("Answer: %v", err)
+	}
+
+	asked, err := s.Ask(ActorAgent, task.ID, "agent", "second?")
+	if err != nil {
+		t.Fatalf("Ask: %v", err)
+	}
+	if asked.Answer != "" {
+		t.Errorf("stale answer survived a new question: %q", asked.Answer)
+	}
+}
+
+// A task waiting on a human sorts above everything, because it is the only
+// state where work has actually stopped.
+func TestWaitingTasksSortFirst(t *testing.T) {
+	s := newTestStore(t)
+	due := DueDate("2020-01-01")
+
+	if _, err := s.Create(ActorHuman, NewTask{Title: "Overdue and urgent", Due: &due, Priority: PriorityUrgent}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	stuck, _ := s.Create(ActorHuman, NewTask{Title: "Merely waiting", Priority: PriorityLow})
+	if _, err := s.Ask(ActorAgent, stuck.ID, "agent", "which one?"); err != nil {
+		t.Fatalf("Ask: %v", err)
+	}
+
+	list, err := s.List(Filter{})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(list) == 0 || list[0].ID != stuck.ID {
+		t.Errorf("waiting task should sort first, got %+v", list)
+	}
+
+	waiting, err := s.Waiting()
+	if err != nil {
+		t.Fatalf("Waiting: %v", err)
+	}
+	if len(waiting) != 1 || waiting[0].ID != stuck.ID {
+		t.Errorf("Waiting() = %+v", waiting)
+	}
+}
+
+// The question round-trips through the Markdown, so a hand edit or a reindex
+// does not lose what an agent is stuck on.
+func TestQuestionSurvivesReindex(t *testing.T) {
+	s := newTestStore(t)
+	task, _ := s.Create(ActorHuman, NewTask{Title: "Ask me"})
+	if _, err := s.Ask(ActorAgent, task.ID, "claude-code", "well?"); err != nil {
+		t.Fatalf("Ask: %v", err)
+	}
+
+	if _, err := s.Reindex(); err != nil {
+		t.Fatalf("Reindex: %v", err)
+	}
+
+	waiting, err := s.Waiting()
+	if err != nil {
+		t.Fatalf("Waiting: %v", err)
+	}
+	if len(waiting) != 1 || waiting[0].Question != "well?" || waiting[0].AskedBy != "claude-code" {
+		t.Errorf("question did not survive reindex: %+v", waiting)
+	}
+}
