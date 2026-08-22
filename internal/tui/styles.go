@@ -16,6 +16,9 @@ var (
 	colOK     = lipgloss.Color("2")
 	colTag    = lipgloss.Color("5")
 	colProj   = lipgloss.Color("6")
+	// Agent activity gets its own hue so it is never confused with a project
+	// or a tag, both of which are also coloured.
+	colAgent = lipgloss.Color("13")
 
 	styleDim      = lipgloss.NewStyle().Foreground(colDim)
 	styleBold     = lipgloss.NewStyle().Bold(true)
@@ -26,6 +29,7 @@ var (
 	styleTag      = lipgloss.NewStyle().Foreground(colTag)
 	styleProject  = lipgloss.NewStyle().Foreground(colProj)
 	styleDoneText = lipgloss.NewStyle().Foreground(colDim).Strikethrough(true)
+	styleAgent    = lipgloss.NewStyle().Foreground(colAgent).Bold(true)
 
 	// The selection bar. Rows under it are rendered as plain text and styled
 	// once, because a colour reset mid-line would punch a hole in the bar.

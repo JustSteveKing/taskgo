@@ -63,16 +63,28 @@ func dueLabel(due *store.DueDate, now time.Time) string {
 }
 
 func renderTaskTable(w io.Writer, entries []store.IndexEntry, now time.Time) {
+	renderTaskTableWithClaims(w, entries, nil, now)
+}
+
+// renderTaskTableWithClaims adds an AGENT column when something is being
+// worked on, and omits it entirely when nothing is — an always-empty column is
+// a permanent question in the reader's mind.
+func renderTaskTableWithClaims(w io.Writer, entries []store.IndexEntry, claims map[int]string, now time.Time) {
 	if len(entries) == 0 {
 		fmt.Fprintln(w, "No tasks.")
 		return
 	}
 
 	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "ID\tS\tP\tTITLE\tPROJECT\tDUE\tTAGS")
+
+	header := "ID\tS\tP\tTITLE\tPROJECT\tDUE\tTAGS"
+	if len(claims) > 0 {
+		header += "\tAGENT"
+	}
+	fmt.Fprintln(tw, header)
 
 	for _, e := range entries {
-		fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\t%s\t%s\n",
+		fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\t%s\t%s",
 			e.ID,
 			statusMark(e.Status),
 			priorityMark(e.Priority),
@@ -81,6 +93,10 @@ func renderTaskTable(w io.Writer, entries []store.IndexEntry, now time.Time) {
 			dueLabel(e.Due, now),
 			strings.Join(e.Tags, ","),
 		)
+		if len(claims) > 0 {
+			fmt.Fprintf(tw, "\t%s", claims[e.ID])
+		}
+		fmt.Fprintln(tw)
 	}
 	_ = tw.Flush()
 }

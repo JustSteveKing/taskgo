@@ -168,9 +168,20 @@ func (m model) taskRow(e store.IndexEntry, selected bool, width int, now time.Ti
 		mark = "✗"
 	}
 
+	// A task an agent is actively holding gets a marker of its own. This is
+	// deliberately not the same signal as "an agent last touched it", which
+	// the activity log already carries — the point is who is working on it
+	// now.
+	held, agentHeld := m.claims.Get(e.ID)
+
+	agentMark := " "
+	if agentHeld {
+		agentMark = "◆"
+	}
+
 	// Built twice: plain for the selection bar, styled otherwise. A colour
 	// reset inside the bar would punch a hole in its background.
-	prefix := fmt.Sprintf(" %s %s %-4d ", priorityPlain(e.Priority), mark, e.ID)
+	prefix := fmt.Sprintf(" %s%s %s %-4d ", agentMark, priorityPlain(e.Priority), mark, e.ID)
 
 	var plain, styled []string
 	if e.Project != "" {
@@ -186,6 +197,11 @@ func (m model) taskRow(e store.IndexEntry, selected bool, width int, now time.Ti
 		styled = append(styled, styleTag.Render("#"+tag))
 	}
 
+	if agentHeld {
+		plain = append(plain, held.By)
+		styled = append(styled, styleAgent.Render(held.By))
+	}
+
 	if selected {
 		line := prefix + e.Title
 		if len(plain) > 0 {
@@ -195,10 +211,21 @@ func (m model) taskRow(e store.IndexEntry, selected bool, width int, now time.Ti
 	}
 
 	title := e.Title
-	if e.Status == store.StatusDone {
+	switch {
+	case e.Status == store.StatusDone:
 		title = styleDoneText.Render(title)
+	case agentHeld:
+		// The title itself changes colour, not just a marker: a glyph in the
+		// margin is easy to miss when scanning, and "an agent is on this" is
+		// the thing you most want to notice before touching it yourself.
+		title = styleAgent.Render(title)
 	}
-	line := fmt.Sprintf(" %s %s %-4d %s", priorityGlyph(e.Priority), markStyled(e.Status, mark), e.ID, title)
+
+	glyph := " "
+	if agentHeld {
+		glyph = styleAgent.Render("◆")
+	}
+	line := fmt.Sprintf(" %s%s %s %-4d %s", glyph, priorityGlyph(e.Priority), markStyled(e.Status, mark), e.ID, title)
 	if len(styled) > 0 {
 		line += "  " + strings.Join(styled, " ")
 	}
@@ -310,6 +337,18 @@ func (m model) detailContent(width, height int) string {
 		meta = append(meta, styleDim.Render(fmt.Sprintf("subtask of #%d", t.Parent)))
 	}
 	b.WriteString(" " + styleDim.Render(strings.Join(meta, " · ")) + "\n")
+
+	if held, ok := m.claims.Get(t.ID); ok {
+		kind := "working on this"
+		if !held.Explicit {
+			// An implicit lease means the agent wrote to the task without
+			// announcing itself, which is weaker evidence and should read
+			// that way.
+			kind = "recently active here"
+		}
+		b.WriteString(" " + styleAgent.Render(fmt.Sprintf("◆ %s %s, %s",
+			held.By, kind, humanDuration(held.Held(now)))) + "\n")
+	}
 
 	if t.Notes != "" {
 		b.WriteString("\n")
@@ -440,4 +479,17 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// humanDuration renders a lease age the way someone glancing at it would say
+// it out loud.
+func humanDuration(d time.Duration) string {
+	switch {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return fmt.Sprintf("for %dm", int(d.Minutes()))
+	default:
+		return fmt.Sprintf("for %dh%02dm", int(d.Hours()), int(d.Minutes())%60)
+	}
 }

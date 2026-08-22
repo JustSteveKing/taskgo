@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/JustSteveKing/taskgo/internal/claim"
 
 	"github.com/JustSteveKing/taskgo/internal/store"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -24,7 +27,7 @@ func connect(t *testing.T) (*mcp.ClientSession, *store.Store) {
 	ctx := context.Background()
 	serverTransport, clientTransport := mcp.NewInMemoryTransports()
 
-	srv := New(s, "test")
+	srv, _ := New(s, "test")
 	serverSession, err := srv.Connect(ctx, serverTransport, nil)
 	if err != nil {
 		t.Fatalf("server connect: %v", err)
@@ -385,5 +388,121 @@ func TestErrorsSurfaceToTheAgent(t *testing.T) {
 		"title": "Bad status", "status": "nonsense",
 	}); !strings.Contains(msg, "nonsense") {
 		t.Errorf("bad status error = %q, want it to name the bad value", msg)
+	}
+}
+
+// ---------------------------------------------------------------- claims
+
+// The agent's identity comes from the MCP handshake, not a tool argument, so
+// what shows up in the UI is what actually connected.
+func TestClaimRecordsTheAgentFromTheHandshake(t *testing.T) {
+	cs, s := connect(t)
+
+	var created store.Task
+	call(t, cs, "create_task", map[string]any{"title": "Work on me"}, &created)
+
+	var out map[string]any
+	call(t, cs, "claim_task", map[string]any{"id": created.ID}, &out)
+
+	set, err := claim.Load(s, time.Now())
+	if err != nil {
+		t.Fatalf("claim.Load: %v", err)
+	}
+	c, ok := set.Get(created.ID)
+	if !ok {
+		t.Fatal("no claim recorded")
+	}
+	// connect() introduces the client as "test-client".
+	if c.By != "test-client" {
+		t.Errorf("claim.By = %q, want the client's declared identity", c.By)
+	}
+	if !c.Explicit {
+		t.Error("claim_task should record an explicit claim")
+	}
+}
+
+// An agent that knows nothing about claiming still gets highlighted, because
+// writing to a task takes a short lease on its own.
+func TestWritingTakesAnImplicitClaim(t *testing.T) {
+	cs, s := connect(t)
+
+	var created store.Task
+	call(t, cs, "create_task", map[string]any{"title": "Implicitly claimed"}, &created)
+
+	set, _ := claim.Load(s, time.Now())
+	c, ok := set.Get(created.ID)
+	if !ok {
+		t.Fatal("a write should take an implicit claim")
+	}
+	if c.Explicit {
+		t.Error("a write should not be recorded as an explicit claim")
+	}
+}
+
+// Completing the work ends the lease: nothing should still be shown as being
+// worked on once it is done.
+func TestCompletingReleasesTheClaim(t *testing.T) {
+	cs, s := connect(t)
+
+	var created store.Task
+	call(t, cs, "create_task", map[string]any{"title": "Finish me"}, &created)
+	call(t, cs, "claim_task", map[string]any{"id": created.ID}, nil)
+
+	if set, _ := claim.Load(s, time.Now()); len(set) != 1 {
+		t.Fatalf("expected a claim before completing, got %+v", set)
+	}
+
+	call(t, cs, "complete_task", map[string]any{"id": created.ID}, nil)
+
+	if set, _ := claim.Load(s, time.Now()); len(set) != 0 {
+		t.Errorf("completing left a claim behind: %+v", set)
+	}
+}
+
+func TestReleaseTaskDropsTheClaim(t *testing.T) {
+	cs, s := connect(t)
+
+	var created store.Task
+	call(t, cs, "create_task", map[string]any{"title": "Give up on me"}, &created)
+	call(t, cs, "claim_task", map[string]any{"id": created.ID}, nil)
+	call(t, cs, "release_task", map[string]any{"id": created.ID}, nil)
+
+	if set, _ := claim.Load(s, time.Now()); len(set) != 0 {
+		t.Errorf("release_task left a claim: %+v", set)
+	}
+}
+
+func TestListClaimsReportsWhatIsHeld(t *testing.T) {
+	cs, _ := connect(t)
+
+	var a, b store.Task
+	call(t, cs, "create_task", map[string]any{"title": "One"}, &a)
+	call(t, cs, "create_task", map[string]any{"title": "Two"}, &b)
+	call(t, cs, "claim_task", map[string]any{"id": a.ID}, nil)
+
+	var listed claimList
+	call(t, cs, "list_claims", map[string]any{}, &listed)
+
+	// Both are held — one explicitly, one implicitly from being created.
+	if listed.Count != 2 {
+		t.Fatalf("got %d claims, want 2: %+v", listed.Count, listed.Claims)
+	}
+	var explicit int
+	for _, c := range listed.Claims {
+		if c.Explicit {
+			explicit++
+		}
+	}
+	if explicit != 1 {
+		t.Errorf("want exactly one explicit claim, got %d", explicit)
+	}
+}
+
+// Claiming a task that does not exist must fail rather than record a lease on
+// nothing.
+func TestClaimingAMissingTaskFails(t *testing.T) {
+	cs, _ := connect(t)
+	if msg := callExpectingError(t, cs, "claim_task", map[string]any{"id": 999}); !strings.Contains(msg, "not found") {
+		t.Errorf("error = %q", msg)
 	}
 }

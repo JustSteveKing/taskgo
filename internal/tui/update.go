@@ -20,7 +20,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.err = nil
-		m.tasks, m.projects, m.counts = msg.tasks, msg.projects, msg.counts
+		m.tasks, m.projects, m.counts, m.claims = msg.tasks, msg.projects, msg.counts, msg.claims
 		m.taskCursor = clamp(m.taskCursor, 0, max(0, len(m.tasks)-1))
 		m.projectCursor = clamp(m.projectCursor, 0, len(m.projects))
 		return m, m.loadDetail()

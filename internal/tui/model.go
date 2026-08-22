@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/JustSteveKing/taskgo/internal/claim"
 	"github.com/JustSteveKing/taskgo/internal/store"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -92,6 +93,7 @@ type model struct {
 	tasks    []store.IndexEntry
 	projects []store.ProjectSummary
 	counts   summary
+	claims   claim.Set
 
 	viewCursor    int
 	projectCursor int
@@ -120,6 +122,7 @@ type loadedMsg struct {
 	tasks    []store.IndexEntry
 	projects []store.ProjectSummary
 	counts   summary
+	claims   claim.Set
 	err      error
 }
 type detailMsg struct {
@@ -231,9 +234,14 @@ func (m model) load() tea.Cmd {
 			}
 		}
 
+		// Claims are ephemeral and read lock-free, so a failure here degrades
+		// the display rather than the whole load.
+		claims, _ := claim.Load(s, now)
+
 		return loadedMsg{
 			tasks:    tasks,
 			projects: projects,
+			claims:   claims,
 			counts:   summary{total: len(all), open: open, overdue: len(overdue), today: len(today)},
 		}
 	}

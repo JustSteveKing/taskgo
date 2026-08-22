@@ -86,6 +86,15 @@ func (s *Store) projectPath(name string) string {
 	return filepath.Join(s.projectsDir(), name+".json")
 }
 
+// WithWriteLock runs fn holding the store's exclusive lock.
+//
+// Exported so packages that keep their own file in the taskgo directory
+// (notifications, claims) serialise against task writes using the same lock
+// rather than inventing a second one. One lock for the whole directory is
+// easier to reason about than several, and contention here is one human and
+// one agent.
+func (s *Store) WithWriteLock(fn func() error) error { return s.withWriteLock(fn) }
+
 // withWriteLock runs fn holding the exclusive lock.
 //
 // The lock is coarse on purpose: it wraps a whole mutation — allocate an id,

@@ -100,6 +100,7 @@ diff and edit by hand.`,
 		a.newReindexCommand(),
 		a.newDeleteCommand(),
 		a.newNotifyCommand(),
+		a.newClaimsCommand(),
 		a.newMCPCommand(version),
 		a.newTUICommand(version),
 	)

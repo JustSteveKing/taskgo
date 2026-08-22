@@ -6,7 +6,9 @@ import (
 	"io"
 	"os"
 	"sync/atomic"
+	"time"
 
+	"github.com/JustSteveKing/taskgo/internal/claim"
 	"github.com/JustSteveKing/taskgo/internal/store"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -34,7 +36,17 @@ func Run(ctx context.Context, s *store.Store, version string) error {
 		Writer: nopWriteCloser{os.Stdout},
 	}
 
-	err := New(s, version).Run(ctx, transport)
+	srv, sess := New(s, version)
+	err := srv.Run(ctx, transport)
+
+	// The agent has gone. Drop every lease it held, which is what makes the
+	// common case correct without asking agents to send heartbeats — the TTL
+	// only has to cover the server being killed outright.
+	now := time.Now()
+	for _, id := range sess.known() {
+		claim.ReleaseSession(s, id, now)
+	}
+
 	if err != nil && stdin.seen() {
 		return nil
 	}

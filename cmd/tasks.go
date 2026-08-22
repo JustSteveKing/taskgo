@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/JustSteveKing/taskgo/internal/claim"
 	"github.com/JustSteveKing/taskgo/internal/store"
 	"github.com/spf13/cobra"
 )
@@ -156,7 +157,15 @@ poor default.`,
 				}
 				return a.emitJSON(entries)
 			}
-			renderTaskTable(a.out, entries, now)
+			// Reading claims must not be able to fail a listing; without them
+			// the table simply drops its AGENT column.
+			held := map[int]string{}
+			if set, err := claim.Load(s, now); err == nil {
+				for id, c := range set {
+					held[id] = c.By
+				}
+			}
+			renderTaskTableWithClaims(a.out, entries, held, now)
 			return nil
 		},
 	}

@@ -17,6 +17,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/JustSteveKing/taskgo/internal/claim"
 	"github.com/JustSteveKing/taskgo/internal/store"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -25,19 +26,22 @@ const actor = store.ActorAgent
 
 // New builds a server exposing the store. The returned server has not been
 // connected to a transport yet.
-func New(s *store.Store, version string) *mcp.Server {
+func New(s *store.Store, version string) (*mcp.Server, *sessions) {
 	srv := mcp.NewServer(&mcp.Implementation{
 		Name:    "taskgo",
 		Title:   "taskgo",
 		Version: version,
 	}, nil)
 
-	registerTaskTools(srv, s)
+	sess := newSessions()
+
+	registerTaskTools(srv, s, sess)
 	registerQueryTools(srv, s)
 	registerProjectTools(srv, s)
 	registerActivityTools(srv, s)
+	registerClaimTools(srv, s, sess)
 
-	return srv
+	return srv, sess
 }
 
 // ---------------------------------------------------------------- shared IO
@@ -91,12 +95,12 @@ type addNoteIn struct {
 	Note string `json:"note" jsonschema:"text to append; required"`
 }
 
-func registerTaskTools(srv *mcp.Server, s *store.Store) {
+func registerTaskTools(srv *mcp.Server, s *store.Store, sess *sessions) {
 	mcp.AddTool(srv, &mcp.Tool{
 		Name: "create_task",
 		Description: "Create a task. Returns the created task including its new id, " +
 			"which you will need to update or complete it later.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, in createTaskIn) (*mcp.CallToolResult, *store.Task, error) {
+	}, func(ctx context.Context, req *mcp.CallToolRequest, in createTaskIn) (*mcp.CallToolResult, *store.Task, error) {
 		newTask := store.NewTask{
 			Title:   in.Title,
 			Notes:   in.Notes,
@@ -124,6 +128,7 @@ func registerTaskTools(srv *mcp.Server, s *store.Store) {
 		if err != nil {
 			return nil, nil, err
 		}
+		touch(s, sess, req, task.ID)
 		return nil, task, nil
 	})
 
@@ -142,7 +147,7 @@ func registerTaskTools(srv *mcp.Server, s *store.Store) {
 		Name: "update_task",
 		Description: "Change fields on an existing task. Omitted fields are left alone. " +
 			"Note that tags and notes REPLACE what is there; use add_note to append a note.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, in updateTaskIn) (*mcp.CallToolResult, *store.Task, error) {
+	}, func(ctx context.Context, req *mcp.CallToolRequest, in updateTaskIn) (*mcp.CallToolResult, *store.Task, error) {
 		up := store.Update{
 			Title:   in.Title,
 			Notes:   in.Notes,
@@ -185,28 +190,32 @@ func registerTaskTools(srv *mcp.Server, s *store.Store) {
 		if err != nil {
 			return nil, nil, err
 		}
+		touch(s, sess, req, task.ID)
 		return nil, task, nil
 	})
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "complete_task",
 		Description: "Mark a task done.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, in taskIDIn) (*mcp.CallToolResult, *store.Task, error) {
+	}, func(ctx context.Context, req *mcp.CallToolRequest, in taskIDIn) (*mcp.CallToolResult, *store.Task, error) {
 		task, err := s.Complete(actor, in.ID)
 		if err != nil {
 			return nil, nil, err
 		}
+		// The work is over, so the lease is too — whoever held it.
+		claim.ReleaseTask(s, task.ID, time.Now())
 		return nil, task, nil
 	})
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "reopen_task",
 		Description: "Move a completed task back to todo.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, in taskIDIn) (*mcp.CallToolResult, *store.Task, error) {
+	}, func(ctx context.Context, req *mcp.CallToolRequest, in taskIDIn) (*mcp.CallToolResult, *store.Task, error) {
 		task, err := s.Reopen(actor, in.ID)
 		if err != nil {
 			return nil, nil, err
 		}
+		touch(s, sess, req, task.ID)
 		return nil, task, nil
 	})
 
@@ -214,11 +223,12 @@ func registerTaskTools(srv *mcp.Server, s *store.Store) {
 		Name: "add_note",
 		Description: "Append a note to a task's notes body, preserving what is already there. " +
 			"Prefer this over update_task when recording progress.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, in addNoteIn) (*mcp.CallToolResult, *store.Task, error) {
+	}, func(ctx context.Context, req *mcp.CallToolRequest, in addNoteIn) (*mcp.CallToolResult, *store.Task, error) {
 		task, err := s.AddNote(actor, in.ID, in.Note)
 		if err != nil {
 			return nil, nil, err
 		}
+		touch(s, sess, req, task.ID)
 		return nil, task, nil
 	})
 }
