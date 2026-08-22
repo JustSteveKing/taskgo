@@ -1,0 +1,7 @@
+# Build output
+/taskgo
+/dist/
+
+# Go
+*.test
+*.out
