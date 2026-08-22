@@ -5,7 +5,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func (a *app) newTUICommand() *cobra.Command {
+func (a *app) newTUICommand(version string) *cobra.Command {
 	return &cobra.Command{
 		Use:   "tui",
 		Short: "Browse and update tasks interactively",
@@ -19,7 +19,7 @@ creates over MCP appears without you doing anything.`,
 			if err != nil {
 				return err
 			}
-			return tui.Run(s)
+			return tui.Run(s, version)
 		},
 	}
 }

@@ -101,7 +101,7 @@ diff and edit by hand.`,
 		a.newDeleteCommand(),
 		a.newNotifyCommand(),
 		a.newMCPCommand(version),
-		a.newTUICommand(),
+		a.newTUICommand(version),
 	)
 
 	a.registerCompletions(root)

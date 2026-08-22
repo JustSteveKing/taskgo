@@ -148,54 +148,52 @@ from the CLI is visible to the agent on its next request.
 taskgo tui
 ```
 
+Laid out like the lazy* family: numbered side panels narrowing what the main
+panel shows, a detail pane that follows the cursor, and a footer whose keys
+change with the focused panel.
+
+```
+╭─ 1 Views ────╮╭─ 3 Tasks (9) ─────────────────────────╮
+│ All          ││  2  Ship the MCP server  @taskgo 3d late│
+│ Today        ││  5  Fix the contact form @website       │
+│ Overdue      ││ ...                                     │
+╰──────────────╯╰─────────────────────────────────────────╯
+╭─ 2 Projects ─╮╭─ Detail — #2 ─────────────────────────╮
+│ (all)        ││ Ship the MCP server                    │
+│ infra      3 ││ todo · normal · 3d late · @taskgo      │
+╰──────────────╯╰─────────────────────────────────────────╯
+ 9 open · 10 total · 2 overdue · 3 today
+ j/k move · space done · n new · e edit · ? help · q quit
+```
+
 | Key | |
 |---|---|
-| `j` `k` | move |
+| `1` `2` `3` | focus views, projects, tasks |
+| `tab` / `shift+tab` | cycle panels |
+| `h` / `l` | move between the side panels and the tasks |
+| `j` `k`, `ctrl+d` `ctrl+u`, `g` `G` | move |
 | `space` | complete / reopen |
 | `s` `p` | cycle status / priority |
+| `n` | new task, in the selected project |
+| `e` | open the Markdown file in `$EDITOR` |
+| `d` | delete, with confirmation |
 | `/` | filter by title |
-| `a` | show completed too |
-| `enter` | detail view with notes |
-| `q` | quit |
+| `?` | help |
+
+Views and projects compose rather than override, so "Overdue" plus a project
+shows that project's overdue work. The selection bar dims on unfocused panels,
+so it is always obvious which cursor the keyboard is driving.
 
 It re-reads the store every couple of seconds while idle, so a task an agent
-creates over MCP appears without you touching anything. It does **not** reload
-while you are typing a filter or reading a task — being two seconds stale beats
-having the list move under your cursor.
+creates over MCP appears without you touching anything — but not while you are
+typing a filter or a new title, because being two seconds stale beats having
+the list move under your cursor.
 
-## Notifications
-
-```bash
-taskgo notify --dry-run     # see what would be sent
-taskgo notify               # send it
-taskgo notify --print-timer # systemd user units, to install yourself
-```
-
-Each task is mentioned at most once a day, so a task that stays overdue does
-not produce an identical popup every hour — but one that becomes due later in
-the day still surfaces, because the record is kept per task rather than per
-run. That record lives in `notified.json`, which like the activity log is not
-derived from anything and so is never rebuilt.
-
-One notification per urgency, not one per task. Five popups for five late tasks
-is not five times as useful; it is how the whole mechanism gets muted.
-
-Needs `notify-send` (the `libnotify` package on Arch). If nothing appears,
-check whether Do Not Disturb is on — the notification is delivered either way
-and will be in your notification history.
-
-## Completions
-
-```bash
-taskgo completion bash > /etc/bash_completion.d/taskgo
-taskgo completion zsh  > "${fpath[1]}/_taskgo"
-taskgo completion fish > ~/.config/fish/completions/taskgo.fish
-```
-
-Completion is live against the store, not just a list of flag names:
-`taskgo done <TAB>` offers open tasks with their titles as descriptions, and
-`taskgo reopen <TAB>` offers only completed ones. `--project`, `--tag`,
-`--status`, `--priority` and `--due` all complete too.
+**If the layout overflows the bottom of your terminal**, the terminal is
+probably reporting more rows than it draws — a known problem on fractionally
+scaled displays, where btop and friends overflow identically. `TestViewFitsTerminal`
+in `internal/tui` checks the arithmetic against a range of sizes, so you can
+tell the two apart.
 
 ## Status
 

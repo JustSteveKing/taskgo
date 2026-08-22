@@ -1,13 +1,21 @@
 // Package tui is the interactive terminal interface.
 //
+// The layout follows the lazygit family: numbered side panels on the left
+// narrowing what the main panel shows, a detail pane under it, and a footer
+// whose keys change with the focused panel. Focus is the organising idea —
+// every key means something in the context of one panel.
+//
 // It reloads from the store on a timer as well as after its own edits, so a
-// task an agent creates over MCP appears here without the user doing anything.
-// That liveness is the point: the TUI is a view onto the files, not a cache of
-// them.
+// task an agent creates over MCP appears without the user doing anything. The
+// TUI is a view onto the files, not a cache of them.
 package tui
 
 import (
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/JustSteveKing/taskgo/internal/store"
@@ -16,50 +24,105 @@ import (
 )
 
 const (
-	// refreshEvery is how often the TUI re-reads the store to pick up changes
-	// made elsewhere. Cheap: the index is one small JSON file.
+	// refreshEvery is how often the store is re-read to pick up outside
+	// changes. Cheap: the index is one small JSON file.
 	refreshEvery = 2 * time.Second
-
-	// statusHold is how long a transient message stays on screen.
-	statusHold = 4 * time.Second
+	statusHold   = 4 * time.Second
 )
 
+// panel identifies a focusable region. The detail pane is not focusable; it
+// follows the task cursor, which is what makes it feel like a preview rather
+// than another thing to manage.
+type panel int
+
+const (
+	panelViews panel = iota
+	panelProjects
+	panelTasks
+	panelCount
+)
+
+func (p panel) title() string {
+	switch p {
+	case panelViews:
+		return "Views"
+	case panelProjects:
+		return "Projects"
+	default:
+		return "Tasks"
+	}
+}
+
+// mode is the modal state layered over the panels.
 type mode int
 
 const (
-	modeList mode = iota
+	modeNormal mode = iota
 	modeFilter
-	modeDetail
+	modeNew
+	modeConfirmDelete
+	modeHelp
 )
 
+// view is a saved query in the Views panel.
+type view struct {
+	name string
+	// apply narrows a filter; today and overdue need the store's own helpers
+	// so they are flagged rather than expressed as a filter.
+	filter  store.Filter
+	special string // "", "today", "overdue"
+}
+
+var views = []view{
+	{name: "All", filter: store.Filter{}},
+	{name: "Today", special: "today"},
+	{name: "Overdue", special: "overdue"},
+	{name: "Doing", filter: store.Filter{Status: store.StatusDoing}},
+	{name: "Blocked", filter: store.Filter{Status: store.StatusBlocked}},
+	{name: "Done", filter: store.Filter{Status: store.StatusDone}},
+}
+
 type model struct {
-	store *store.Store
+	store   *store.Store
+	version string
 
-	tasks  []store.IndexEntry
-	cursor int
-	mode   mode
+	focus panel
+	mode  mode
 
-	filter    textinput.Model
-	filterVal string
-	showDone  bool
+	tasks    []store.IndexEntry
+	projects []store.ProjectSummary
+	counts   summary
+
+	viewCursor    int
+	projectCursor int
+	taskCursor    int
 
 	detail *store.Task
+
+	input     textinput.Model
+	filterVal string
 
 	status    string
 	statusErr bool
 	err       error
 
-	width  int
-	height int
-	quit   bool
+	width, height int
+	quit          bool
 }
 
-// Messages.
-type tasksLoadedMsg struct {
-	tasks []store.IndexEntry
-	err   error
+type summary struct {
+	total, open, overdue, today int
 }
-type detailLoadedMsg struct {
+
+// ------------------------------------------------------------------ messages
+
+type loadedMsg struct {
+	tasks    []store.IndexEntry
+	projects []store.ProjectSummary
+	counts   summary
+	err      error
+}
+type detailMsg struct {
 	task *store.Task
 	err  error
 }
@@ -69,14 +132,13 @@ type statusMsg struct {
 }
 type clearStatusMsg struct{}
 type tickMsg time.Time
+type editorDoneMsg struct{ err error }
 
-func New(s *store.Store) model {
+func New(s *store.Store, version string) model {
 	ti := textinput.New()
-	ti.Placeholder = "filter by title…"
-	ti.Prompt = "/"
-	ti.CharLimit = 120
+	ti.CharLimit = 200
 
-	return model{store: s, filter: ti}
+	return model{store: s, version: version, focus: panelTasks, input: ti}
 }
 
 func (m model) Init() tea.Cmd {
@@ -87,23 +149,114 @@ func tick() tea.Cmd {
 	return tea.Tick(refreshEvery, func(t time.Time) tea.Msg { return tickMsg(t) })
 }
 
-// load reads the store. It is a command rather than an inline call so the UI
-// never blocks on IO.
+// currentFilter combines the selected view, the selected project and any text
+// filter. They compose rather than override, so "Overdue" plus a project shows
+// that project's overdue work.
+func (m model) currentFilter() (store.Filter, string) {
+	v := views[m.viewCursor]
+	f := v.filter
+	f.Text = m.filterVal
+
+	if p := m.selectedProject(); p != "" {
+		f.Project = p
+	}
+	return f, v.special
+}
+
+func (m model) selectedProject() string {
+	// Index 0 of the Projects panel is "(all)".
+	if m.projectCursor <= 0 || m.projectCursor-1 >= len(m.projects) {
+		return ""
+	}
+	return m.projects[m.projectCursor-1].Name
+}
+
 func (m model) load() tea.Cmd {
-	filter := store.Filter{IncludeDone: m.showDone, Text: m.filterVal}
 	s := m.store
+	filter, special := m.currentFilter()
+
 	return func() tea.Msg {
-		tasks, err := s.List(filter)
-		return tasksLoadedMsg{tasks: tasks, err: err}
+		now := time.Now()
+
+		var (
+			tasks []store.IndexEntry
+			err   error
+		)
+		switch special {
+		case "today":
+			tasks, err = s.Today(now)
+		case "overdue":
+			tasks, err = s.Overdue(now)
+		default:
+			tasks, err = s.List(filter)
+		}
+		if err != nil {
+			return loadedMsg{err: err}
+		}
+
+		// The special views come from helpers that do not take a filter, so
+		// the project narrowing is applied here instead.
+		if special != "" && filter.Project != "" {
+			var kept []store.IndexEntry
+			for _, t := range tasks {
+				if strings.EqualFold(t.Project, filter.Project) {
+					kept = append(kept, t)
+				}
+			}
+			tasks = kept
+		}
+
+		projects, err := s.ListProjects()
+		if err != nil {
+			return loadedMsg{err: err}
+		}
+
+		all, err := s.List(store.Filter{IncludeDone: true})
+		if err != nil {
+			return loadedMsg{err: err}
+		}
+		overdue, err := s.Overdue(now)
+		if err != nil {
+			return loadedMsg{err: err}
+		}
+		today, err := s.Today(now)
+		if err != nil {
+			return loadedMsg{err: err}
+		}
+
+		open := 0
+		for _, t := range all {
+			if t.Status != store.StatusDone {
+				open++
+			}
+		}
+
+		return loadedMsg{
+			tasks:    tasks,
+			projects: projects,
+			counts:   summary{total: len(all), open: open, overdue: len(overdue), today: len(today)},
+		}
 	}
 }
 
-func (m model) loadDetail(id int) tea.Cmd {
+func (m model) loadDetail() tea.Cmd {
+	entry, ok := m.currentTask()
+	if !ok {
+		return func() tea.Msg { return detailMsg{} }
+	}
 	s := m.store
+	id := entry.ID
 	return func() tea.Msg {
 		task, err := s.Get(id)
-		return detailLoadedMsg{task: task, err: err}
+		return detailMsg{task: task, err: err}
 	}
+}
+
+func (m model) currentTask() (store.IndexEntry, bool) {
+	if m.taskCursor < 0 || m.taskCursor >= len(m.tasks) {
+		return store.IndexEntry{}, false
+	}
+	return m.tasks[m.taskCursor], true
 }
 
 func flash(text string, isErr bool) tea.Cmd {
@@ -114,249 +267,45 @@ func clearStatusAfter() tea.Cmd {
 	return tea.Tick(statusHold, func(time.Time) tea.Msg { return clearStatusMsg{} })
 }
 
-// current returns the highlighted entry, if any.
-func (m model) current() (store.IndexEntry, bool) {
-	if m.cursor < 0 || m.cursor >= len(m.tasks) {
-		return store.IndexEntry{}, false
-	}
-	return m.tasks[m.cursor], true
-}
-
-// mutate wraps a store call, reloading afterwards so the list reflects the
-// change immediately rather than waiting for the next tick.
-func (m model) mutate(verb string, fn func(*store.Store, int) error) tea.Cmd {
-	entry, ok := m.current()
-	if !ok {
-		return nil
-	}
-	s := m.store
-	id := entry.ID
-	return func() tea.Msg {
-		if err := fn(s, id); err != nil {
-			return statusMsg{text: err.Error(), isErr: true}
-		}
-		return statusMsg{text: fmt.Sprintf("%s #%d", verb, id)}
-	}
-}
-
-func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.WindowSizeMsg:
-		m.width, m.height = msg.Width, msg.Height
-		return m, nil
-
-	case tasksLoadedMsg:
-		if msg.err != nil {
-			m.err = msg.err
-			return m, nil
-		}
-		m.err = nil
-		m.tasks = msg.tasks
-		if m.cursor >= len(m.tasks) {
-			m.cursor = max(0, len(m.tasks)-1)
-		}
-		return m, nil
-
-	case detailLoadedMsg:
-		if msg.err != nil {
-			return m, flash(msg.err.Error(), true)
-		}
-		m.detail = msg.task
-		m.mode = modeDetail
-		return m, nil
-
-	case statusMsg:
-		m.status, m.statusErr = msg.text, msg.isErr
-		return m, tea.Batch(m.load(), clearStatusAfter())
-
-	case clearStatusMsg:
-		m.status, m.statusErr = "", false
-		return m, nil
-
-	case tickMsg:
-		// Reload only when idle. Refreshing under the cursor while someone is
-		// typing a filter or reading a task is worse than being two seconds
-		// stale.
-		if m.mode == modeList {
-			return m, tea.Batch(m.load(), tick())
-		}
-		return m, tick()
-
-	case tea.KeyMsg:
-		return m.handleKey(msg)
-	}
-
-	return m, nil
-}
-
-func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch m.mode {
-	case modeFilter:
-		switch msg.Type {
-		case tea.KeyEnter:
-			m.mode = modeList
-			m.filterVal = m.filter.Value()
-			return m, m.load()
-		case tea.KeyEsc:
-			m.mode = modeList
-			m.filter.SetValue(m.filterVal)
-			return m, nil
-		}
-		var cmd tea.Cmd
-		m.filter, cmd = m.filter.Update(msg)
-		return m, cmd
-
-	case modeDetail:
-		switch msg.String() {
-		case "esc", "q", "enter":
-			m.mode = modeList
-			m.detail = nil
-			return m, nil
-		}
-		return m, nil
-	}
-
-	switch msg.String() {
-	case "q", "ctrl+c":
-		m.quit = true
-		return m, tea.Quit
-
-	case "j", "down":
-		if m.cursor < len(m.tasks)-1 {
-			m.cursor++
-		}
-		return m, nil
-
-	case "k", "up":
-		if m.cursor > 0 {
-			m.cursor--
-		}
-		return m, nil
-
-	case "g", "home":
-		m.cursor = 0
-		return m, nil
-
-	case "G", "end":
-		m.cursor = max(0, len(m.tasks)-1)
-		return m, nil
-
-	case "/":
-		m.mode = modeFilter
-		m.filter.Focus()
-		return m, textinput.Blink
-
-	case "a":
-		m.showDone = !m.showDone
-		label := "hiding done"
-		if m.showDone {
-			label = "showing done"
-		}
-		return m, tea.Batch(m.load(), flash(label, false))
-
-	case "enter", "l":
-		if entry, ok := m.current(); ok {
-			return m, m.loadDetail(entry.ID)
-		}
-		return m, nil
-
-	case " ", "x":
-		entry, ok := m.current()
-		if !ok {
-			return m, nil
-		}
-		if entry.Status == store.StatusDone {
-			return m, m.mutate("reopened", func(s *store.Store, id int) error {
-				_, err := s.Reopen(store.ActorHuman, id)
-				return err
-			})
-		}
-		return m, m.mutate("completed", func(s *store.Store, id int) error {
-			_, err := s.Complete(store.ActorHuman, id)
-			return err
-		})
-
-	case "s":
-		return m, m.cycleStatus()
-
-	case "p":
-		return m, m.cyclePriority()
-
-	case "r":
-		return m, tea.Batch(m.load(), flash("reloaded", false))
-
-	case "?":
-		return m, flash("j/k move · space done · s status · p priority · / filter · a all · enter detail · q quit", false)
-	}
-
-	return m, nil
-}
-
-// cycleStatus steps a task through the lifecycle, skipping done — completing
-// is what space is for, and having two keys that both mark done invites
-// pressing the wrong one.
-func (m model) cycleStatus() tea.Cmd {
-	entry, ok := m.current()
-	if !ok {
-		return nil
-	}
-
-	order := []store.Status{store.StatusTodo, store.StatusDoing, store.StatusBlocked}
-	next := order[0]
-	for i, st := range order {
-		if st == entry.Status {
-			next = order[(i+1)%len(order)]
-			break
-		}
-	}
-
-	s := m.store
-	id := entry.ID
-	return func() tea.Msg {
-		if _, err := s.Update(store.ActorHuman, id, store.Update{Status: &next}); err != nil {
-			return statusMsg{text: err.Error(), isErr: true}
-		}
-		return statusMsg{text: fmt.Sprintf("#%d → %s", id, next)}
-	}
-}
-
-func (m model) cyclePriority() tea.Cmd {
-	entry, ok := m.current()
-	if !ok {
-		return nil
-	}
-
-	order := []store.Priority{
-		store.PriorityLow, store.PriorityNormal, store.PriorityHigh, store.PriorityUrgent,
-	}
-	next := order[0]
-	for i, p := range order {
-		if p == entry.Priority {
-			next = order[(i+1)%len(order)]
-			break
-		}
-	}
-
-	s := m.store
-	id := entry.ID
-	return func() tea.Msg {
-		if _, err := s.Update(store.ActorHuman, id, store.Update{Priority: &next}); err != nil {
-			return statusMsg{text: err.Error(), isErr: true}
-		}
-		return statusMsg{text: fmt.Sprintf("#%d → %s", id, next)}
-	}
-}
-
 // Run starts the interactive program.
-func Run(s *store.Store) error {
-	p := tea.NewProgram(New(s), tea.WithAltScreen())
+func Run(s *store.Store, version string) error {
+	p := tea.NewProgram(New(s, version), tea.WithAltScreen())
 	_, err := p.Run()
 	return err
 }
 
-func max(a, b int) int {
-	if a > b {
-		return a
+// openEditor suspends the TUI and hands the terminal to $EDITOR, which is the
+// only honest way to edit a task whose real form is a Markdown file.
+func (m model) openEditor(editor string) tea.Cmd {
+	entry, ok := m.currentTask()
+	if !ok {
+		return nil
 	}
-	return b
+	path := filepath.Join(m.store.Root(), "tasks", fmt.Sprintf("%d.md", entry.ID))
+
+	c := exec.Command("sh", "-c", editor+" "+shellQuote(path))
+	return tea.ExecProcess(c, func(err error) tea.Msg { return editorDoneMsg{err: err} })
+}
+
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+func editorCommand() string {
+	for _, key := range []string{"VISUAL", "EDITOR"} {
+		if v := os.Getenv(key); v != "" {
+			return v
+		}
+	}
+	return "vi"
+}
+
+func clamp(v, lo, hi int) int {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
 }
