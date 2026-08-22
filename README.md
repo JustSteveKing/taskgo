@@ -118,6 +118,28 @@ process*, so it serialises the CLI against a running MCP server but does not
 serialise goroutines inside one process. The store therefore holds an
 in-process mutex as well; the two locks guard different things.
 
+## MCP
+
+```bash
+claude mcp add taskgo -- taskgo mcp
+```
+
+Thirteen tools: `list_tasks` `get_task` `create_task` `update_task`
+`complete_task` `reopen_task` `add_note` `search_tasks` `get_overdue`
+`get_today` `list_projects` `create_project` `get_activity`.
+
+Every change an agent makes lands in the same Markdown files the CLI reads, so
+it shows up in `taskgo list` immediately — and every one is recorded as
+`agent` in the activity log, which is how you tell later who did what.
+
+Tools take task **ids**, never titles. An agent wanting "the login task" should
+call `search_tasks` first and use the id it gets back; resolving a fuzzy
+reference inside a tool call would mean guessing on the agent's behalf, and
+completing the wrong task is not something the agent can undo.
+
+The server holds no cached index — it re-reads on every call, so a task you add
+from the CLI is visible to the agent on its next request.
+
 ## Status
 
-Working: storage and CLI. Next: the MCP server (`taskgo mcp`), then the TUI.
+Working: storage, CLI, MCP server. Next: the TUI.

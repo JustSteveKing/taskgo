@@ -68,6 +68,7 @@ diff and edit by hand.`,
 		newProjectsCommand(),
 		newReindexCommand(),
 		newDeleteCommand(),
+		newMCPCommand(version),
 	)
 
 	return root

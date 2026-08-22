@@ -1,0 +1,389 @@
+package mcpserver
+
+import (
+	"context"
+	"encoding/json"
+	"strings"
+	"testing"
+
+	"github.com/JustSteveKing/taskgo/internal/store"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+)
+
+// connect wires a real MCP client to a real server over an in-memory
+// transport, so these tests exercise the actual protocol path — schema
+// validation included — rather than calling the handlers directly.
+func connect(t *testing.T) (*mcp.ClientSession, *store.Store) {
+	t.Helper()
+
+	s, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	ctx := context.Background()
+	serverTransport, clientTransport := mcp.NewInMemoryTransports()
+
+	srv := New(s, "test")
+	serverSession, err := srv.Connect(ctx, serverTransport, nil)
+	if err != nil {
+		t.Fatalf("server connect: %v", err)
+	}
+	t.Cleanup(func() { _ = serverSession.Close() })
+
+	client := mcp.NewClient(&mcp.Implementation{Name: "test-client"}, nil)
+	clientSession, err := client.Connect(ctx, clientTransport, nil)
+	if err != nil {
+		t.Fatalf("client connect: %v", err)
+	}
+	t.Cleanup(func() { _ = clientSession.Close() })
+
+	return clientSession, s
+}
+
+// call invokes a tool and decodes its structured output.
+func call(t *testing.T, cs *mcp.ClientSession, name string, args any, out any) {
+	t.Helper()
+
+	res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      name,
+		Arguments: args,
+	})
+	if err != nil {
+		t.Fatalf("%s: transport error: %v", name, err)
+	}
+	if res.IsError {
+		t.Fatalf("%s: tool error: %s", name, textOf(res))
+	}
+	if out == nil {
+		return
+	}
+	if res.StructuredContent == nil {
+		t.Fatalf("%s: no structured content; text was %q", name, textOf(res))
+	}
+	raw, err := json.Marshal(res.StructuredContent)
+	if err != nil {
+		t.Fatalf("%s: re-marshal structured content: %v", name, err)
+	}
+	if err := json.Unmarshal(raw, out); err != nil {
+		t.Fatalf("%s: decode %s: %v", name, raw, err)
+	}
+}
+
+// callExpectingError asserts the tool reports a failure rather than succeeding.
+func callExpectingError(t *testing.T, cs *mcp.ClientSession, name string, args any) string {
+	t.Helper()
+
+	res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: name, Arguments: args})
+	if err != nil {
+		return err.Error()
+	}
+	if !res.IsError {
+		t.Fatalf("%s: expected an error, got success", name)
+	}
+	return textOf(res)
+}
+
+func textOf(res *mcp.CallToolResult) string {
+	var b strings.Builder
+	for _, c := range res.Content {
+		if tc, ok := c.(*mcp.TextContent); ok {
+			b.WriteString(tc.Text)
+		}
+	}
+	return b.String()
+}
+
+// Every tool named in the project brief must actually be exposed. This is the
+// test that catches a tool being renamed or dropped by accident.
+func TestAllPromisedToolsAreRegistered(t *testing.T) {
+	cs, _ := connect(t)
+
+	res, err := cs.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+
+	got := map[string]bool{}
+	for _, tool := range res.Tools {
+		got[tool.Name] = true
+		if tool.Description == "" {
+			t.Errorf("tool %q has no description; an agent has to guess what it does", tool.Name)
+		}
+		if tool.InputSchema == nil {
+			t.Errorf("tool %q has no input schema", tool.Name)
+		}
+	}
+
+	for _, want := range []string{
+		"list_tasks", "get_task", "create_task", "update_task", "complete_task",
+		"reopen_task", "list_projects", "create_project", "search_tasks",
+		"get_overdue", "get_today", "add_note", "get_activity",
+	} {
+		if !got[want] {
+			t.Errorf("tool %q is not registered", want)
+		}
+	}
+}
+
+// The core promise of the project: what an agent writes, a human sees.
+func TestAgentWritesAreVisibleToTheStoreAndAttributed(t *testing.T) {
+	cs, s := connect(t)
+
+	var created store.Task
+	call(t, cs, "create_task", map[string]any{
+		"title":    "Written by an agent",
+		"project":  "demo",
+		"priority": "high",
+		"due":      "2026-09-01",
+		"tags":     []string{"mcp"},
+	}, &created)
+
+	if created.ID == 0 {
+		t.Fatal("create_task returned no id")
+	}
+
+	// Read it back through the store, the way the CLI would.
+	fromDisk, err := s.Get(created.ID)
+	if err != nil {
+		t.Fatalf("store.Get after agent create: %v", err)
+	}
+	if fromDisk.Title != "Written by an agent" {
+		t.Errorf("title on disk = %q", fromDisk.Title)
+	}
+	if fromDisk.Priority != store.PriorityHigh {
+		t.Errorf("priority on disk = %q", fromDisk.Priority)
+	}
+
+	// And the change must be attributed to the agent, not to a human.
+	events, err := s.Activity(0)
+	if err != nil {
+		t.Fatalf("Activity: %v", err)
+	}
+	if len(events) == 0 {
+		t.Fatal("agent create wrote no activity")
+	}
+	if events[0].Actor != store.ActorAgent {
+		t.Errorf("actor = %q, want %q", events[0].Actor, store.ActorAgent)
+	}
+}
+
+// The other direction: what a human changes, the agent sees on its next call.
+// This is why the server holds no cached index.
+func TestHumanWritesAreVisibleToTheAgentImmediately(t *testing.T) {
+	cs, s := connect(t)
+
+	// Agent looks first and sees nothing.
+	var before taskList
+	call(t, cs, "list_tasks", map[string]any{}, &before)
+	if before.Count != 0 {
+		t.Fatalf("expected an empty store, got %d", before.Count)
+	}
+
+	// Human adds a task behind the running server's back.
+	if _, err := s.Create(store.ActorHuman, store.NewTask{Title: "Added by the human"}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	var after taskList
+	call(t, cs, "list_tasks", map[string]any{}, &after)
+	if after.Count != 1 {
+		t.Fatalf("agent did not see the human's task; count = %d", after.Count)
+	}
+	if after.Tasks[0].Title != "Added by the human" {
+		t.Errorf("title = %q", after.Tasks[0].Title)
+	}
+}
+
+func TestCompleteAndReopenRoundTrip(t *testing.T) {
+	cs, _ := connect(t)
+
+	var created store.Task
+	call(t, cs, "create_task", map[string]any{"title": "Round trip"}, &created)
+
+	var done store.Task
+	call(t, cs, "complete_task", map[string]any{"id": created.ID}, &done)
+	if done.Status != store.StatusDone {
+		t.Errorf("status = %q, want done", done.Status)
+	}
+
+	var reopened store.Task
+	call(t, cs, "reopen_task", map[string]any{"id": created.ID}, &reopened)
+	if reopened.Status != store.StatusTodo {
+		t.Errorf("status = %q, want todo", reopened.Status)
+	}
+}
+
+// add_note must append. An agent recording progress should never be able to
+// destroy what a human wrote.
+func TestAddNotePreservesExistingNotes(t *testing.T) {
+	cs, _ := connect(t)
+
+	var created store.Task
+	call(t, cs, "create_task", map[string]any{
+		"title": "Has notes",
+		"notes": "Human wrote this.",
+	}, &created)
+
+	var noted store.Task
+	call(t, cs, "add_note", map[string]any{
+		"id":   created.ID,
+		"note": "Agent appended this.",
+	}, &noted)
+
+	if !strings.Contains(noted.Notes, "Human wrote this.") {
+		t.Error("add_note destroyed the human's notes")
+	}
+	if !strings.Contains(noted.Notes, "Agent appended this.") {
+		t.Error("add_note did not record the agent's note")
+	}
+}
+
+// update_task must leave omitted fields alone, and clear_due must be able to
+// remove a due date — the distinction the pointer fields exist for.
+func TestUpdateOmittedFieldsAreLeftAlone(t *testing.T) {
+	cs, _ := connect(t)
+
+	var created store.Task
+	call(t, cs, "create_task", map[string]any{
+		"title": "Original", "due": "2026-09-01", "project": "demo",
+	}, &created)
+
+	var updated store.Task
+	call(t, cs, "update_task", map[string]any{
+		"id": created.ID, "status": "doing",
+	}, &updated)
+
+	if updated.Due == nil {
+		t.Error("an unrelated update cleared the due date")
+	}
+	if updated.Project != "demo" {
+		t.Errorf("project = %q, want it untouched", updated.Project)
+	}
+	if updated.Status != store.StatusDoing {
+		t.Errorf("status = %q, want doing", updated.Status)
+	}
+
+	var cleared store.Task
+	call(t, cs, "update_task", map[string]any{
+		"id": created.ID, "clear_due": true,
+	}, &cleared)
+	if cleared.Due != nil {
+		t.Errorf("clear_due left due = %v", cleared.Due)
+	}
+}
+
+func TestSearchFindsNotesBodies(t *testing.T) {
+	cs, _ := connect(t)
+
+	call(t, cs, "create_task", map[string]any{
+		"title": "Nothing obvious in the title",
+		"notes": "the needle is in here",
+	}, nil)
+	call(t, cs, "create_task", map[string]any{"title": "Unrelated"}, nil)
+
+	var found taskList
+	call(t, cs, "search_tasks", map[string]any{"query": "needle"}, &found)
+	if found.Count != 1 {
+		t.Fatalf("search matched %d tasks, want 1", found.Count)
+	}
+}
+
+func TestGetTodayIncludesOverdue(t *testing.T) {
+	cs, _ := connect(t)
+
+	call(t, cs, "create_task", map[string]any{"title": "Late", "due": "2020-01-01"}, nil)
+	call(t, cs, "create_task", map[string]any{"title": "Due today", "due": "today"}, nil)
+	call(t, cs, "create_task", map[string]any{"title": "No date"}, nil)
+
+	var today taskList
+	call(t, cs, "get_today", map[string]any{}, &today)
+	if today.Count != 2 {
+		t.Errorf("get_today returned %d, want the overdue one and today's: %+v", today.Count, today.Tasks)
+	}
+
+	var overdue taskList
+	call(t, cs, "get_overdue", map[string]any{}, &overdue)
+	if overdue.Count != 1 {
+		t.Errorf("get_overdue returned %d, want 1", overdue.Count)
+	}
+}
+
+func TestListTasksHidesDoneUnlessAsked(t *testing.T) {
+	cs, _ := connect(t)
+
+	var open store.Task
+	call(t, cs, "create_task", map[string]any{"title": "Open"}, &open)
+	var closed store.Task
+	call(t, cs, "create_task", map[string]any{"title": "Closed"}, &closed)
+	call(t, cs, "complete_task", map[string]any{"id": closed.ID}, nil)
+
+	var listed taskList
+	call(t, cs, "list_tasks", map[string]any{}, &listed)
+	if listed.Count != 1 {
+		t.Errorf("default list returned %d, want only the open task", listed.Count)
+	}
+
+	var all taskList
+	call(t, cs, "list_tasks", map[string]any{"include_done": true}, &all)
+	if all.Count != 2 {
+		t.Errorf("include_done returned %d, want 2", all.Count)
+	}
+}
+
+func TestProjectTools(t *testing.T) {
+	cs, _ := connect(t)
+
+	call(t, cs, "create_project", map[string]any{
+		"name": "demo", "description": "a demo project",
+	}, nil)
+	call(t, cs, "create_task", map[string]any{"title": "In demo", "project": "demo"}, nil)
+
+	var projects projectList
+	call(t, cs, "list_projects", map[string]any{}, &projects)
+	if projects.Count != 1 {
+		t.Fatalf("got %d projects, want 1", projects.Count)
+	}
+	if projects.Projects[0].Open != 1 {
+		t.Errorf("open count = %d, want 1", projects.Projects[0].Open)
+	}
+}
+
+func TestGetActivityDistinguishesActors(t *testing.T) {
+	cs, s := connect(t)
+
+	if _, err := s.Create(store.ActorHuman, store.NewTask{Title: "Human task"}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	call(t, cs, "create_task", map[string]any{"title": "Agent task"}, nil)
+
+	var activity activityList
+	call(t, cs, "get_activity", map[string]any{}, &activity)
+	if activity.Count != 2 {
+		t.Fatalf("got %d events, want 2", activity.Count)
+	}
+	if activity.Events[0].Actor != store.ActorAgent {
+		t.Errorf("newest actor = %q, want agent", activity.Events[0].Actor)
+	}
+	if activity.Events[1].Actor != store.ActorHuman {
+		t.Errorf("older actor = %q, want human", activity.Events[1].Actor)
+	}
+}
+
+// Errors must reach the agent as tool errors it can read and act on, not as
+// silent successes or transport failures.
+func TestErrorsSurfaceToTheAgent(t *testing.T) {
+	cs, _ := connect(t)
+
+	if msg := callExpectingError(t, cs, "get_task", map[string]any{"id": 999}); !strings.Contains(msg, "not found") {
+		t.Errorf("missing task error = %q, want it to say not found", msg)
+	}
+	if msg := callExpectingError(t, cs, "create_task", map[string]any{"title": ""}); msg == "" {
+		t.Error("empty title produced no error message")
+	}
+	if msg := callExpectingError(t, cs, "create_task", map[string]any{
+		"title": "Bad status", "status": "nonsense",
+	}); !strings.Contains(msg, "nonsense") {
+		t.Errorf("bad status error = %q, want it to name the bad value", msg)
+	}
+}

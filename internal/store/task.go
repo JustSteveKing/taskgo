@@ -101,14 +101,18 @@ func joinPriorities() string {
 	return strings.Join(out, ", ")
 }
 
-// DueDate is a calendar date with no time or zone. A task due "Tuesday" is due
-// all of Tuesday wherever you are, so carrying a timestamp would invent
-// precision the domain does not have.
-type DueDate struct {
-	Y int
-	M time.Month
-	D int
-}
+// DueDate is a calendar date with no time or zone, held as "YYYY-MM-DD".
+//
+// It is a defined string rather than a struct for two reasons. First, that is
+// exactly how it appears in YAML and JSON, so there are no custom marshallers
+// to keep in step and the MCP schema generator infers "string" correctly
+// instead of describing an object the wire format never carries. Second, in
+// this format lexicographic order IS chronological order, so comparisons are
+// string comparisons.
+//
+// A task due "Tuesday" is due all of Tuesday wherever you are, so carrying a
+// timestamp would invent precision the domain does not have.
+type DueDate string
 
 const dueLayout = "2006-01-02"
 
@@ -134,41 +138,32 @@ func ParseDue(raw string) (*DueDate, error) {
 }
 
 func dueFrom(t time.Time) *DueDate {
-	y, m, d := t.Date()
-	return &DueDate{Y: y, M: m, D: d}
+	d := DueDate(t.Format(dueLayout))
+	return &d
 }
 
-func (d DueDate) String() string {
-	return fmt.Sprintf("%04d-%02d-%02d", d.Y, int(d.M), d.D)
-}
+// DueOnDay is the DueDate for a given instant, in local time.
+func DueOnDay(t time.Time) DueDate { return DueDate(t.Format(dueLayout)) }
 
-// Time renders the date at local midnight, for comparisons against "today".
+func (d DueDate) String() string { return string(d) }
+
+// Time renders the date at local midnight, for day arithmetic.
 func (d DueDate) Time() time.Time {
-	return time.Date(d.Y, d.M, d.D, 0, 0, 0, 0, time.Local)
+	t, err := time.ParseInLocation(dueLayout, string(d), time.Local)
+	if err != nil {
+		return time.Time{}
+	}
+	return t
 }
 
-func (d DueDate) Before(other DueDate) bool { return d.Time().Before(other.Time()) }
+// Before compares dates. Sound as a string comparison because the format is
+// fixed-width and big-endian.
+func (d DueDate) Before(other DueDate) bool { return d < other }
 
-func (d DueDate) MarshalYAML() (any, error) { return d.String(), nil }
-
+// UnmarshalYAML normalises and validates, so a hand-edited file with a
+// malformed date is reported rather than silently carried.
 func (d *DueDate) UnmarshalYAML(value *yaml.Node) error {
 	parsed, err := ParseDue(value.Value)
-	if err != nil {
-		return err
-	}
-	if parsed == nil {
-		return nil
-	}
-	*d = *parsed
-	return nil
-}
-
-func (d DueDate) MarshalJSON() ([]byte, error) {
-	return []byte(`"` + d.String() + `"`), nil
-}
-
-func (d *DueDate) UnmarshalJSON(b []byte) error {
-	parsed, err := ParseDue(strings.Trim(string(b), `"`))
 	if err != nil {
 		return err
 	}
@@ -221,16 +216,14 @@ func (t *Task) Overdue(now time.Time) bool {
 	if t.Due == nil || t.Status == StatusDone {
 		return false
 	}
-	y, m, d := now.Date()
-	return t.Due.Before(DueDate{Y: y, M: m, D: d})
+	return t.Due.Before(DueOnDay(now))
 }
 
 func (t *Task) DueOn(day time.Time) bool {
 	if t.Due == nil {
 		return false
 	}
-	y, m, d := day.Date()
-	return *t.Due == DueDate{Y: y, M: m, D: d}
+	return *t.Due == DueOnDay(day)
 }
 
 const frontmatterFence = "---"

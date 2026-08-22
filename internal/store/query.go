@@ -104,16 +104,14 @@ func sortEntries(entries []IndexEntry) {
 
 // Overdue returns unfinished tasks whose due date has passed.
 func (s *Store) Overdue(now time.Time) ([]IndexEntry, error) {
-	y, m, d := now.Date()
-	today := DueDate{Y: y, M: m, D: d}
+	today := DueOnDay(now)
 	return s.List(Filter{DueBefore: &today})
 }
 
 // Today returns unfinished tasks due today, plus everything already overdue —
 // which is what a person actually means by "what's on today".
 func (s *Store) Today(now time.Time) ([]IndexEntry, error) {
-	y, m, d := now.Date()
-	today := DueDate{Y: y, M: m, D: d}
+	today := DueOnDay(now)
 
 	idx, err := s.readIndex()
 	if err != nil {

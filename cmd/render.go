@@ -45,8 +45,7 @@ func dueLabel(due *store.DueDate, now time.Time) string {
 		return ""
 	}
 
-	y, m, d := now.Date()
-	today := store.DueDate{Y: y, M: m, D: d}
+	today := store.DueOnDay(now)
 
 	days := int(due.Time().Sub(today.Time()).Hours() / 24)
 	switch {

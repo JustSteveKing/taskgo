@@ -35,7 +35,7 @@ func TestTaskMarkdownRoundTrip(t *testing.T) {
 			task: Task{
 				ID: 47, Title: "Fix login redirect",
 				Status: StatusDoing, Priority: PriorityHigh,
-				Due:     &DueDate{Y: 2026, M: time.August, D: 25},
+				Due:     ptrDue("2026-08-25"),
 				Project: "taskgo", Tags: []string{"auth", "bug"}, Parent: 12,
 				Created: created, Updated: created,
 				Notes: "Some notes.",
@@ -243,7 +243,7 @@ func TestConcurrentCreatesGetDistinctIDs(t *testing.T) {
 
 func TestUpdateDistinguishesClearFromLeaveAlone(t *testing.T) {
 	s := newTestStore(t)
-	due := DueDate{Y: 2026, M: time.August, D: 25}
+	due := DueDate("2026-08-25")
 	task, err := s.Create(ActorHuman, NewTask{Title: "Dated", Due: &due})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -413,7 +413,7 @@ func TestListHidesDoneByDefault(t *testing.T) {
 
 func TestOverdueIgnoresCompletedTasks(t *testing.T) {
 	s := newTestStore(t)
-	past := DueDate{Y: 2020, M: time.January, D: 1}
+	past := DueDate("2020-01-01")
 
 	if _, err := s.Create(ActorHuman, NewTask{Title: "Late", Due: &past}); err != nil {
 		t.Fatalf("Create: %v", err)
@@ -482,4 +482,9 @@ func TestNonTaskFilesInTasksDirAreLeftAlone(t *testing.T) {
 	if _, err := os.Stat(stray); err != nil {
 		t.Error("reindex deleted a file it did not own")
 	}
+}
+
+func ptrDue(s string) *DueDate {
+	d := DueDate(s)
+	return &d
 }
