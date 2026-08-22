@@ -31,7 +31,11 @@ func New(s *store.Store, version string) (*mcp.Server, *sessions) {
 		Name:    "taskgo",
 		Title:   "taskgo",
 		Version: version,
-	}, nil)
+	}, &mcp.ServerOptions{
+		// Sent at initialize, so an agent knows the workflow before its first
+		// tool call rather than inferring one from tool descriptions.
+		Instructions: instructions,
+	})
 
 	sess := newSessions()
 
@@ -41,6 +45,7 @@ func New(s *store.Store, version string) (*mcp.Server, *sessions) {
 	registerActivityTools(srv, s, sess)
 	registerClaimTools(srv, s, sess)
 	registerQuestionTools(srv, s, sess)
+	registerSubtaskTools(srv, s, sess)
 
 	return srv, sess
 }
@@ -49,16 +54,36 @@ func New(s *store.Store, version string) (*mcp.Server, *sessions) {
 
 // taskList is the shape every multi-task tool returns. Count is included
 // because it saves the agent counting an array it may only partly read.
+type taskRow struct {
+	store.IndexEntry
+	// Subtasks is present only when the task has children, so a parent's
+	// state is visible without a second call.
+	Subtasks string `json:"subtasks,omitempty"`
+}
+
 type taskList struct {
-	Tasks []store.IndexEntry `json:"tasks"`
-	Count int                `json:"count"`
+	Tasks []taskRow `json:"tasks"`
+	Count int       `json:"count"`
 }
 
 func listResult(entries []store.IndexEntry) taskList {
-	if entries == nil {
-		entries = []store.IndexEntry{}
+	return taskList{Tasks: rows(entries, nil), Count: len(entries)}
+}
+
+func listResultWithProgress(entries []store.IndexEntry, progress map[int]store.Progress) taskList {
+	return taskList{Tasks: rows(entries, progress), Count: len(entries)}
+}
+
+func rows(entries []store.IndexEntry, progress map[int]store.Progress) []taskRow {
+	out := make([]taskRow, 0, len(entries))
+	for _, e := range entries {
+		row := taskRow{IndexEntry: e}
+		if p, ok := progress[e.ID]; ok && p.Any() {
+			row.Subtasks = p.String()
+		}
+		out = append(out, row)
 	}
-	return taskList{Tasks: entries, Count: len(entries)}
+	return out
 }
 
 // ---------------------------------------------------------------- task tools
@@ -275,7 +300,8 @@ func registerQueryTools(srv *mcp.Server, s *store.Store, sess *sessions) {
 		if err != nil {
 			return nil, taskList{}, err
 		}
-		return nil, listResult(entries), nil
+		progress, _ := s.ProgressFor()
+		return nil, listResultWithProgress(entries, progress), nil
 	})
 
 	mcp.AddTool(srv, &mcp.Tool{

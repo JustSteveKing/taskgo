@@ -282,7 +282,8 @@ func (m model) tasksContent(width, visible int) string {
 	return b.String()
 }
 
-func (m model) taskRow(e store.IndexEntry, selected bool, width int, now time.Time) string {
+func (m model) taskRow(node store.TreeNode, selected bool, width int, now time.Time) string {
+	e := node.Entry
 	waiting := e.Question != ""
 
 	mark := " "
@@ -314,6 +315,22 @@ func (m model) taskRow(e store.IndexEntry, selected bool, width int, now time.Ti
 	// reset inside the bar would punch a hole in its background.
 	prefix := fmt.Sprintf(" %s%s %s %-4d ", agentMark, priorityPlain(e.Priority), mark, e.ID)
 
+	// Indent guides make a subtask visibly subordinate. Without them a nested
+	// list is just rows in a suggestive order.
+	indent := ""
+	if node.Depth > 0 {
+		branch := "├─ "
+		if node.Last {
+			branch = "└─ "
+		}
+		indent = strings.Repeat("   ", node.Depth-1) + branch
+	}
+
+	label := e.Title
+	if node.Progress.Any() {
+		label = fmt.Sprintf("%s [%s]", label, node.Progress)
+	}
+
 	var plain, styled []string
 	if e.Project != "" {
 		plain = append(plain, "@"+e.Project)
@@ -334,14 +351,14 @@ func (m model) taskRow(e store.IndexEntry, selected bool, width int, now time.Ti
 	}
 
 	if selected {
-		line := prefix + e.Title
+		line := prefix + indent + label
 		if len(plain) > 0 {
 			line += "  " + strings.Join(plain, " ")
 		}
 		return m.selectStyle(panelTasks).Render(pad(truncate(line, width), width))
 	}
 
-	title := e.Title
+	title := label
 	switch {
 	case waiting:
 		title = styleWaiting.Render(title)
@@ -362,7 +379,8 @@ func (m model) taskRow(e store.IndexEntry, selected bool, width int, now time.Ti
 	if waiting {
 		statusGlyph = styleWaiting.Render(mark)
 	}
-	line := fmt.Sprintf(" %s%s %s %-4d %s", glyph, priorityGlyph(e.Priority), statusGlyph, e.ID, title)
+	line := fmt.Sprintf(" %s%s %s %-4d %s%s", glyph, priorityGlyph(e.Priority), statusGlyph, e.ID,
+		styleDim.Render(indent), title)
 	if len(styled) > 0 {
 		line += "  " + strings.Join(styled, " ")
 	}
@@ -473,6 +491,9 @@ func (m model) detailContent(width, height int) string {
 	if t.Parent != 0 {
 		meta = append(meta, styleDim.Render(fmt.Sprintf("subtask of #%d", t.Parent)))
 	}
+	if p, ok := m.progress[t.ID]; ok && p.Any() {
+		meta = append(meta, styleAccent.Render(fmt.Sprintf("%s subtasks done", p)))
+	}
 	b.WriteString(" " + styleDim.Render(strings.Join(meta, " · ")) + "\n")
 
 	if t.AwaitingAnswer() {
@@ -562,7 +583,7 @@ func (m model) footer() string {
 	default:
 		keys = [][2]string{
 			{"j/k", "move"}, {"space", "done"}, {"a", "answer"}, {"n", "new"},
-			{"e", "edit"}, {"s", "status"}, {"p", "priority"}, {"/", "filter"},
+			{"N", "subtask"}, {"e", "edit"}, {"s", "status"}, {"/", "filter"},
 		}
 	}
 	keys = append(keys, [2]string{"?", "help"}, [2]string{"q", "quit"})
@@ -603,6 +624,7 @@ func (m model) helpView() string {
 			{"s", "cycle status (todo → doing → blocked)"},
 			{"p", "cycle priority"},
 			{"n", "new task, in the selected project"},
+			{"N", "new subtask of the selected task"},
 			{"e", "open the Markdown file in $EDITOR"},
 			{"d", "delete, with confirmation"},
 			{"/", "filter by title"},

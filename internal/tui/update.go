@@ -21,7 +21,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.err = nil
 		m.tasks, m.projects, m.counts = msg.tasks, msg.projects, msg.counts
-		m.claims, m.agents = msg.claims, msg.agents
+		m.claims, m.agents, m.progress = msg.claims, msg.agents, msg.progress
 		m.agentCursor = clamp(m.agentCursor, 0, len(m.agents))
 		m.taskCursor = clamp(m.taskCursor, 0, max(0, len(m.tasks)-1))
 		m.projectCursor = clamp(m.projectCursor, 0, len(m.projects))
@@ -120,8 +120,11 @@ func (m model) handleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		s := m.store
 		project := m.selectedProject()
+		parent := m.newParent
 		return m, func() tea.Msg {
-			task, err := s.Create(store.ActorHuman, store.NewTask{Title: value, Project: project})
+			task, err := s.Create(store.ActorHuman, store.NewTask{
+				Title: value, Project: project, Parent: parent,
+			})
 			if err != nil {
 				return statusMsg{text: err.Error(), isErr: true}
 			}
@@ -278,7 +281,24 @@ func (m model) handleTaskKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "n":
 		m.mode = modeNew
+		m.newParent = 0
 		m.input.Placeholder = "new task title…"
+		m.input.Prompt = "> "
+		m.input.SetValue("")
+		m.input.Focus()
+		return m, textinput.Blink
+
+	case "N":
+		// Shift-N adds a subtask of whatever is selected. A separate key
+		// rather than a prompt: deciding parentage after typing a title is
+		// backwards, and it is the sort of question people answer wrong.
+		entry, ok := m.currentTask()
+		if !ok {
+			return m, nil
+		}
+		m.mode = modeNew
+		m.newParent = entry.ID
+		m.input.Placeholder = fmt.Sprintf("subtask of #%d…", entry.ID)
 		m.input.Prompt = "> "
 		m.input.SetValue("")
 		m.input.Focus()

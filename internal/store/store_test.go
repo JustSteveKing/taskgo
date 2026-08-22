@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -609,5 +610,187 @@ func TestQuestionSurvivesReindex(t *testing.T) {
 	}
 	if len(waiting) != 1 || waiting[0].Question != "well?" || waiting[0].AskedBy != "claude-code" {
 		t.Errorf("question did not survive reindex: %+v", waiting)
+	}
+}
+
+// Guarding only self-parenting let 1→2 then 2→1 through, producing a loop that
+// any tree walk would hang on.
+func TestParentCyclesAreRejected(t *testing.T) {
+	s := newTestStore(t)
+	for i := 0; i < 3; i++ {
+		if _, err := s.Create(ActorHuman, NewTask{Title: "Task"}); err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+	}
+
+	two := 2
+	if _, err := s.Update(ActorHuman, 1, Update{Parent: &two}); err != nil {
+		t.Fatalf("1 under 2: %v", err)
+	}
+
+	// Direct loop.
+	one := 1
+	if _, err := s.Update(ActorHuman, 2, Update{Parent: &one}); err == nil {
+		t.Error("a direct parent loop was accepted")
+	}
+
+	// Indirect: 3 under 1, then 2 under 3 would close 2→3→1→2.
+	if _, err := s.Update(ActorHuman, 3, Update{Parent: &one}); err != nil {
+		t.Fatalf("3 under 1: %v", err)
+	}
+	three := 3
+	if _, err := s.Update(ActorHuman, 2, Update{Parent: &three}); err == nil {
+		t.Error("an indirect parent loop was accepted")
+	}
+
+	// Self-parenting stays rejected.
+	if _, err := s.Update(ActorHuman, 1, Update{Parent: &one}); err == nil {
+		t.Error("self-parenting was accepted")
+	}
+}
+
+// A cycle already on disk, from a hand edit, must not hang the check meant to
+// catch it.
+func TestCycleOnDiskDoesNotHangTheGuard(t *testing.T) {
+	s := newTestStore(t)
+	for i := 0; i < 2; i++ {
+		if _, err := s.Create(ActorHuman, NewTask{Title: "Task"}); err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+	}
+
+	// Forge the loop by hand, the way an editor would.
+	for _, pair := range [][2]int{{1, 2}, {2, 1}} {
+		path := filepath.Join(s.tasksDir(), strconv.Itoa(pair[0])+".md")
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read: %v", err)
+		}
+		edited := strings.Replace(string(data), "created:", "parent: "+strconv.Itoa(pair[1])+"\ncreated:", 1)
+		if err := os.WriteFile(path, []byte(edited), 0o644); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+	}
+	if _, err := s.Reindex(); err != nil {
+		t.Fatalf("Reindex: %v", err)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		third, _ := s.Create(ActorHuman, NewTask{Title: "Third"})
+		one := 1
+		_, _ = s.Update(ActorHuman, third.ID, Update{Parent: &one})
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the cycle guard hung on a loop that was already on disk")
+	}
+}
+
+func TestChildrenAndProgress(t *testing.T) {
+	s := newTestStore(t)
+	parent, _ := s.Create(ActorHuman, NewTask{Title: "Parent"})
+	for i := 0; i < 3; i++ {
+		if _, err := s.Create(ActorHuman, NewTask{Title: "Child", Parent: parent.ID}); err != nil {
+			t.Fatalf("Create child: %v", err)
+		}
+	}
+	if _, err := s.Complete(ActorHuman, 2); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+
+	kids, err := s.Children(parent.ID)
+	if err != nil {
+		t.Fatalf("Children: %v", err)
+	}
+	if len(kids) != 3 {
+		t.Errorf("got %d children, want 3", len(kids))
+	}
+
+	progress, err := s.ProgressFor()
+	if err != nil {
+		t.Fatalf("ProgressFor: %v", err)
+	}
+	if got := progress[parent.ID]; got.Done != 1 || got.Total != 3 {
+		t.Errorf("progress = %+v, want 1/3", got)
+	}
+}
+
+// Grandchildren must not count toward a parent's progress: "2 of 3" should not
+// change because someone subdivided one of the three.
+func TestProgressCountsDirectChildrenOnly(t *testing.T) {
+	s := newTestStore(t)
+	parent, _ := s.Create(ActorHuman, NewTask{Title: "Parent"})
+	child, _ := s.Create(ActorHuman, NewTask{Title: "Child", Parent: parent.ID})
+	if _, err := s.Create(ActorHuman, NewTask{Title: "Grandchild", Parent: child.ID}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	progress, _ := s.ProgressFor()
+	if got := progress[parent.ID]; got.Total != 1 {
+		t.Errorf("parent progress = %+v, want a total of 1", got)
+	}
+}
+
+func TestTreeNestsChildrenUnderParents(t *testing.T) {
+	s := newTestStore(t)
+	parent, _ := s.Create(ActorHuman, NewTask{Title: "Parent"})
+	if _, err := s.Create(ActorHuman, NewTask{Title: "Child A", Parent: parent.ID}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := s.Create(ActorHuman, NewTask{Title: "Child B", Parent: parent.ID}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := s.Create(ActorHuman, NewTask{Title: "Unrelated"}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	nodes, err := s.Tree(Filter{})
+	if err != nil {
+		t.Fatalf("Tree: %v", err)
+	}
+	if len(nodes) != 4 {
+		t.Fatalf("got %d nodes, want 4", len(nodes))
+	}
+
+	var depths []int
+	for _, n := range nodes {
+		depths = append(depths, n.Depth)
+	}
+	// Parent, its two children, then the unrelated task.
+	want := []int{0, 1, 1, 0}
+	for i := range want {
+		if depths[i] != want[i] {
+			t.Fatalf("depths = %v, want %v (%+v)", depths, want, nodes)
+		}
+	}
+	if !nodes[2].Last {
+		t.Error("the second child should be marked as last")
+	}
+}
+
+// Filtering must not hide a matching subtask just because its parent did not
+// match — an overdue subtask is still overdue.
+func TestTreePromotesOrphanedMatches(t *testing.T) {
+	s := newTestStore(t)
+	parent, _ := s.Create(ActorHuman, NewTask{Title: "Parent, not overdue"})
+	past := DueDate("2020-01-01")
+	if _, err := s.Create(ActorHuman, NewTask{Title: "Overdue child", Parent: parent.ID, Due: &past}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	today := DueOnDay(time.Now())
+	nodes, err := s.Tree(Filter{DueBefore: &today})
+	if err != nil {
+		t.Fatalf("Tree: %v", err)
+	}
+	if len(nodes) != 1 {
+		t.Fatalf("got %d nodes, want just the overdue child: %+v", len(nodes), nodes)
+	}
+	if nodes[0].Depth != 0 {
+		t.Errorf("the orphaned match should be promoted to depth 0, got %d", nodes[0].Depth)
 	}
 }

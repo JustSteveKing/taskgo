@@ -80,6 +80,10 @@ func renderTaskTable(w io.Writer, entries []store.IndexEntry, now time.Time) {
 // worked on, and omits it entirely when nothing is — an always-empty column is
 // a permanent question in the reader's mind.
 func renderTaskTableWithClaims(w io.Writer, entries []store.IndexEntry, claims map[int]string, now time.Time) {
+	renderTaskTableFull(w, entries, claims, nil, now)
+}
+
+func renderTaskTableFull(w io.Writer, entries []store.IndexEntry, claims map[int]string, progress map[int]store.Progress, now time.Time) {
 	if len(entries) == 0 {
 		fmt.Fprintln(w, "No tasks.")
 		return
@@ -94,11 +98,16 @@ func renderTaskTableWithClaims(w io.Writer, entries []store.IndexEntry, claims m
 	fmt.Fprintln(tw, header)
 
 	for _, e := range entries {
+		title := e.Title
+		if p, ok := progress[e.ID]; ok && p.Any() {
+			title = fmt.Sprintf("%s  [%s]", title, p)
+		}
+
 		fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\t%s\t%s",
 			e.ID,
 			waitingMark(e),
 			priorityMark(e.Priority),
-			e.Title,
+			title,
 			e.Project,
 			dueLabel(e.Due, now),
 			strings.Join(e.Tags, ","),
@@ -134,4 +143,46 @@ func renderTask(w io.Writer, t *store.Task, now time.Time) {
 	if t.Notes != "" {
 		fmt.Fprintf(w, "\n%s\n", t.Notes)
 	}
+}
+
+// renderTaskTree draws the hierarchy with box-drawing guides, so a subtask is
+// visibly a subtask rather than just another row that happens to be adjacent.
+func renderTaskTree(w io.Writer, nodes []store.TreeNode, claims map[int]string, now time.Time) {
+	if len(nodes) == 0 {
+		fmt.Fprintln(w, "No tasks.")
+		return
+	}
+
+	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
+
+	header := "ID\tS\tP\tTITLE\tPROJECT\tDUE\tTAGS"
+	if len(claims) > 0 {
+		header += "\tAGENT"
+	}
+	fmt.Fprintln(tw, header)
+
+	for _, n := range nodes {
+		e := n.Entry
+
+		title := e.Title
+		if n.Progress.Any() {
+			title = fmt.Sprintf("%s  [%s]", title, n.Progress)
+		}
+		if n.Depth > 0 {
+			branch := "├─ "
+			if n.Last {
+				branch = "└─ "
+			}
+			title = strings.Repeat("   ", n.Depth-1) + branch + title
+		}
+
+		fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\t%s\t%s",
+			e.ID, waitingMark(e), priorityMark(e.Priority), title,
+			e.Project, dueLabel(e.Due, now), strings.Join(e.Tags, ","))
+		if len(claims) > 0 {
+			fmt.Fprintf(tw, "\t%s", claims[e.ID])
+		}
+		fmt.Fprintln(tw)
+	}
+	_ = tw.Flush()
 }

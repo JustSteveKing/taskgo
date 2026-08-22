@@ -98,11 +98,12 @@ type model struct {
 	focus panel
 	mode  mode
 
-	tasks    []store.IndexEntry
+	tasks    []store.TreeNode
 	projects []store.ProjectSummary
 	counts   summary
 	claims   claim.Set
 	agents   []agents.Session
+	progress map[int]store.Progress
 
 	viewCursor    int
 	projectCursor int
@@ -113,6 +114,8 @@ type model struct {
 
 	input     textinput.Model
 	filterVal string
+	// newParent carries the parent for a subtask being typed.
+	newParent int
 
 	status    string
 	statusErr bool
@@ -129,11 +132,12 @@ type summary struct {
 // ------------------------------------------------------------------ messages
 
 type loadedMsg struct {
-	tasks    []store.IndexEntry
+	tasks    []store.TreeNode
 	projects []store.ProjectSummary
 	counts   summary
 	claims   claim.Set
 	agents   []agents.Session
+	progress map[int]store.Progress
 	err      error
 }
 type detailMsg struct {
@@ -206,28 +210,42 @@ func (m model) load() tea.Cmd {
 	return func() tea.Msg {
 		now := time.Now()
 
+		// The task list is always a tree. Subtasks that match while their
+		// parent does not are promoted rather than hidden, so a filter never
+		// conceals a matching task behind an unmatching ancestor.
 		var (
-			tasks []store.IndexEntry
+			tasks []store.TreeNode
+			flat  []store.IndexEntry
 			err   error
 		)
 		switch special {
 		case "today":
-			tasks, err = s.Today(now)
+			flat, err = s.Today(now)
 		case "overdue":
-			tasks, err = s.Overdue(now)
+			flat, err = s.Overdue(now)
 		default:
-			tasks, err = s.List(filter)
+			tasks, err = s.Tree(filter)
 		}
 		if err != nil {
 			return loadedMsg{err: err}
 		}
 
+		// The date-based views come from helpers that return a flat list, so
+		// they are rendered flat: nesting a set selected purely by due date
+		// would imply a structure the selection does not have.
+		if flat != nil {
+			progress, _ := s.ProgressFor()
+			for _, e := range flat {
+				tasks = append(tasks, store.TreeNode{Entry: e, Progress: progress[e.ID]})
+			}
+		}
+
 		// The special views come from helpers that do not take a filter, so
 		// the project narrowing is applied here instead.
 		if special != "" && filter.Project != "" {
-			var kept []store.IndexEntry
+			var kept []store.TreeNode
 			for _, t := range tasks {
-				if strings.EqualFold(t.Project, filter.Project) {
+				if strings.EqualFold(t.Entry.Project, filter.Project) {
 					kept = append(kept, t)
 				}
 			}
@@ -239,9 +257,12 @@ func (m model) load() tea.Cmd {
 		// knows nothing about claims.
 		if agentSession != "" {
 			held, _ := claim.Load(s, now)
-			var kept []store.IndexEntry
+			var kept []store.TreeNode
 			for _, t := range tasks {
-				if c, ok := held.Get(t.ID); ok && c.Session == agentSession {
+				if c, ok := held.Get(t.Entry.ID); ok && c.Session == agentSession {
+					// Held tasks are shown flat: what an agent holds is a set,
+					// not a hierarchy.
+					t.Depth = 0
 					kept = append(kept, t)
 				}
 			}
@@ -280,12 +301,14 @@ func (m model) load() tea.Cmd {
 		// the display rather than the whole load.
 		claims, _ := claim.Load(s, now)
 		connected, _ := agents.List(s)
+		childProgress, _ := s.ProgressFor()
 
 		return loadedMsg{
 			tasks:    tasks,
 			projects: projects,
 			claims:   claims,
 			agents:   connected,
+			progress: childProgress,
 			counts:   summary{total: len(all), open: open, overdue: len(overdue), today: len(today), waiting: waiting},
 		}
 	}
@@ -308,7 +331,7 @@ func (m model) currentTask() (store.IndexEntry, bool) {
 	if m.taskCursor < 0 || m.taskCursor >= len(m.tasks) {
 		return store.IndexEntry{}, false
 	}
-	return m.tasks[m.taskCursor], true
+	return m.tasks[m.taskCursor].Entry, true
 }
 
 func flash(text string, isErr bool) tea.Cmd {

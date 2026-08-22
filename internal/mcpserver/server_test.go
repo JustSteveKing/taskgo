@@ -674,3 +674,120 @@ func TestClaimingRegistersTheSession(t *testing.T) {
 		t.Fatalf("agent holding a task is not in the roster: %+v", connected)
 	}
 }
+
+// ---------------------------------------------------------------- subtasks
+
+func TestBreakDownCreatesChildrenInheritingTheProject(t *testing.T) {
+	cs, s := connect(t)
+
+	var parent store.Task
+	call(t, cs, "create_task", map[string]any{"title": "Ship version 1", "project": "api"}, &parent)
+
+	var out breakDownOut
+	call(t, cs, "break_down_task", map[string]any{
+		"id":     parent.ID,
+		"titles": []string{"Write the release notes", "Tag the release", "Update the docs"},
+	}, &out)
+
+	if len(out.Created) != 3 {
+		t.Fatalf("created %d subtasks, want 3", len(out.Created))
+	}
+	if out.Subtasks != "0/3" {
+		t.Errorf("progress = %q, want 0/3", out.Subtasks)
+	}
+	for _, child := range out.Created {
+		if child.Parent != parent.ID {
+			t.Errorf("subtask %d has parent %d", child.ID, child.Parent)
+		}
+		if child.Project != "api" {
+			t.Errorf("subtask %d project = %q, want it inherited", child.ID, child.Project)
+		}
+	}
+
+	children, err := s.Children(parent.ID)
+	if err != nil {
+		t.Fatalf("Children: %v", err)
+	}
+	if len(children) != 3 {
+		t.Errorf("store has %d children", len(children))
+	}
+}
+
+func TestGetSubtasksReportsProgress(t *testing.T) {
+	cs, _ := connect(t)
+
+	var parent store.Task
+	call(t, cs, "create_task", map[string]any{"title": "Parent"}, &parent)
+	var out breakDownOut
+	call(t, cs, "break_down_task", map[string]any{
+		"id": parent.ID, "titles": []string{"One", "Two"},
+	}, &out)
+
+	call(t, cs, "complete_task", map[string]any{"id": out.Created[0].ID}, nil)
+
+	var listed subtaskList
+	call(t, cs, "get_subtasks", map[string]any{"id": parent.ID}, &listed)
+	if listed.Count != 2 {
+		t.Fatalf("got %d subtasks, want 2", listed.Count)
+	}
+	if listed.Progress != "1/2" {
+		t.Errorf("progress = %q, want 1/2", listed.Progress)
+	}
+}
+
+// A parent's progress should be visible in a plain listing, so an agent does
+// not have to call get_subtasks on every row to find out.
+func TestListTasksCarriesSubtaskProgress(t *testing.T) {
+	cs, _ := connect(t)
+
+	var parent store.Task
+	call(t, cs, "create_task", map[string]any{"title": "Parent"}, &parent)
+	call(t, cs, "break_down_task", map[string]any{
+		"id": parent.ID, "titles": []string{"One", "Two"},
+	}, nil)
+
+	var listed taskList
+	call(t, cs, "list_tasks", map[string]any{}, &listed)
+
+	var found string
+	for _, row := range listed.Tasks {
+		if row.ID == parent.ID {
+			found = row.Subtasks
+		}
+	}
+	if found != "0/2" {
+		t.Errorf("parent row subtasks = %q, want 0/2", found)
+	}
+}
+
+// Tasks without children must not carry an empty progress field, or every row
+// in a flat list grows a meaningless "0/0".
+func TestChildlessTasksHaveNoSubtaskField(t *testing.T) {
+	cs, _ := connect(t)
+	call(t, cs, "create_task", map[string]any{"title": "Alone"}, nil)
+
+	var listed taskList
+	call(t, cs, "list_tasks", map[string]any{}, &listed)
+	if len(listed.Tasks) != 1 {
+		t.Fatalf("got %d tasks", len(listed.Tasks))
+	}
+	if listed.Tasks[0].Subtasks != "" {
+		t.Errorf("subtasks = %q, want empty for a childless task", listed.Tasks[0].Subtasks)
+	}
+}
+
+// The server tells agents how to work here, at handshake, rather than leaving
+// them to infer a workflow from tool descriptions.
+func TestServerShipsInstructions(t *testing.T) {
+	cs, _ := connect(t)
+
+	got := cs.InitializeResult().Instructions
+	if got == "" {
+		t.Fatal("no instructions sent at initialize")
+	}
+	for _, want := range []string{"claim_task", "ask_human", "subtask", "add_note"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("instructions do not mention %q", want)
+		}
+	}
+}

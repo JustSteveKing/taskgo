@@ -178,13 +178,8 @@ func (s *Store) Update(actor Actor, id int, up Update) (*Task, error) {
 			changes = append(changes, "tags")
 		}
 		if up.Parent != nil {
-			if *up.Parent == id {
-				return errors.New("a task cannot be its own parent")
-			}
-			if *up.Parent != 0 {
-				if _, err := s.Get(*up.Parent); err != nil {
-					return err
-				}
+			if err := s.checkParent(id, *up.Parent); err != nil {
+				return err
 			}
 			t.Parent = *up.Parent
 			changes = append(changes, "parent")
@@ -351,6 +346,49 @@ func (s *Store) writeTask(t *Task) error {
 	}
 	return writeFileAtomic(s.taskPath(t.ID), data, 0o644)
 }
+
+// checkParent rejects a parent that would create a cycle.
+//
+// Guarding only against self-parenting is not enough: 1→2 followed by 2→1 was
+// accepted and produced a loop that any tree walk would hang on. Ancestors are
+// walked instead, with a hard bound so a cycle already on disk — from a hand
+// edit, say — cannot hang the check that is meant to detect it.
+func (s *Store) checkParent(id, parent int) error {
+	if parent == 0 {
+		return nil
+	}
+	if parent == id {
+		return errors.New("a task cannot be its own parent")
+	}
+	if _, err := s.Get(parent); err != nil {
+		return err
+	}
+
+	idx, err := s.readIndex()
+	if err != nil {
+		return err
+	}
+	byID := map[int]IndexEntry{}
+	for _, e := range idx.Tasks {
+		byID[e.ID] = e
+	}
+
+	for cursor, steps := parent, 0; cursor != 0 && steps <= maxDepth; steps++ {
+		if cursor == id {
+			return fmt.Errorf("task %d is already below %d; that would make a loop", parent, id)
+		}
+		entry, ok := byID[cursor]
+		if !ok {
+			break
+		}
+		cursor = entry.Parent
+	}
+	return nil
+}
+
+// maxDepth bounds tree walks. Nesting deeper than this is a sign something has
+// gone wrong rather than a hierarchy anyone meant to build.
+const maxDepth = 32
 
 func (idx *Index) has(id int) bool {
 	for _, e := range idx.Tasks {

@@ -242,3 +242,120 @@ func (s *Store) Resolve(ref string) (int, error) {
 func (s *Store) Waiting() ([]IndexEntry, error) {
 	return s.List(Filter{NeedsInput: true, IncludeDone: true})
 }
+
+// Children returns the direct subtasks of a task.
+func (s *Store) Children(id int) ([]IndexEntry, error) {
+	idx, err := s.readIndex()
+	if err != nil {
+		return nil, err
+	}
+
+	var out []IndexEntry
+	for _, e := range idx.Tasks {
+		if e.Parent == id {
+			out = append(out, e)
+		}
+	}
+	sortEntries(out)
+	return out, nil
+}
+
+// Progress counts how many of a task's direct subtasks are done.
+//
+// Direct children only: a parent's progress is about the pieces it was broken
+// into, and counting grandchildren would make "2 of 3" depend on how finely
+// someone else subdivided one of those pieces.
+type Progress struct {
+	Done  int `json:"done"`
+	Total int `json:"total"`
+}
+
+func (p Progress) Any() bool { return p.Total > 0 }
+
+func (p Progress) String() string {
+	return fmt.Sprintf("%d/%d", p.Done, p.Total)
+}
+
+// ProgressFor returns child completion for every task that has children, in
+// one pass — callers rendering a list need all of them and should not open the
+// index once per row.
+func (s *Store) ProgressFor() (map[int]Progress, error) {
+	idx, err := s.readIndex()
+	if err != nil {
+		return nil, err
+	}
+
+	out := map[int]Progress{}
+	for _, e := range idx.Tasks {
+		if e.Parent == 0 {
+			continue
+		}
+		p := out[e.Parent]
+		p.Total++
+		if e.Status == StatusDone {
+			p.Done++
+		}
+		out[e.Parent] = p
+	}
+	return out, nil
+}
+
+// TreeNode is one row of a hierarchical listing.
+type TreeNode struct {
+	Entry    IndexEntry
+	Depth    int
+	Progress Progress
+	// Last marks the final child of its parent, so a renderer can draw the
+	// corner of the tree without looking ahead.
+	Last bool
+}
+
+// Tree arranges matching tasks as a hierarchy.
+//
+// A subtask whose parent does not match the filter is promoted to the top
+// level rather than hidden: filtering for "overdue" should not conceal an
+// overdue subtask because its parent is not itself overdue.
+func (s *Store) Tree(f Filter) ([]TreeNode, error) {
+	entries, err := s.List(f)
+	if err != nil {
+		return nil, err
+	}
+
+	matched := map[int]bool{}
+	for _, e := range entries {
+		matched[e.ID] = true
+	}
+
+	progress, err := s.ProgressFor()
+	if err != nil {
+		return nil, err
+	}
+
+	childrenOf := map[int][]IndexEntry{}
+	var roots []IndexEntry
+	for _, e := range entries {
+		if e.Parent != 0 && matched[e.Parent] {
+			childrenOf[e.Parent] = append(childrenOf[e.Parent], e)
+			continue
+		}
+		roots = append(roots, e)
+	}
+
+	var out []TreeNode
+	var walk func(items []IndexEntry, depth int)
+	walk = func(items []IndexEntry, depth int) {
+		if depth > maxDepth {
+			return
+		}
+		for i, e := range items {
+			out = append(out, TreeNode{
+				Entry: e, Depth: depth, Progress: progress[e.ID],
+				Last: i == len(items)-1,
+			})
+			walk(childrenOf[e.ID], depth+1)
+		}
+	}
+	walk(roots, 0)
+
+	return out, nil
+}

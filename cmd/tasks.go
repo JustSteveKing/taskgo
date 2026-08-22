@@ -102,6 +102,7 @@ func (a *app) newListCommand() *cobra.Command {
 		overdue  bool
 		today    bool
 		waiting  bool
+		tree     bool
 		search   string
 		parentID int
 	)
@@ -122,6 +123,35 @@ poor default.`,
 				return err
 			}
 			now := time.Now()
+
+			// The tree view builds its own rows, since nesting is a shape the
+			// flat filters cannot express.
+			if tree {
+				f := store.Filter{Project: project, Tag: tag, IncludeDone: all}
+				if status != "" {
+					if f.Status, err = store.ParseStatus(status); err != nil {
+						return err
+					}
+				}
+				nodes, err := s.Tree(f)
+				if err != nil {
+					return err
+				}
+				if a.jsonOut {
+					if nodes == nil {
+						nodes = []store.TreeNode{}
+					}
+					return a.emitJSON(nodes)
+				}
+				held := map[int]string{}
+				if set, err := claim.Load(s, now); err == nil {
+					for id, c := range set {
+						held[id] = c.By
+					}
+				}
+				renderTaskTree(a.out, nodes, held, now)
+				return nil
+			}
 
 			var entries []store.IndexEntry
 			switch {
@@ -168,7 +198,8 @@ poor default.`,
 					held[id] = c.By
 				}
 			}
-			renderTaskTableWithClaims(a.out, entries, held, now)
+			progress, _ := s.ProgressFor()
+			renderTaskTableFull(a.out, entries, held, progress, now)
 			return nil
 		},
 	}
@@ -181,6 +212,7 @@ poor default.`,
 	cmd.Flags().BoolVar(&overdue, "overdue", false, "only overdue tasks")
 	cmd.Flags().BoolVar(&today, "today", false, "due today, plus anything already overdue")
 	cmd.Flags().BoolVar(&waiting, "waiting", false, "only tasks where an agent is waiting on you")
+	cmd.Flags().BoolVar(&tree, "tree", false, "nest subtasks under their parents")
 	cmd.Flags().StringVar(&search, "search", "", "full-text search across titles and notes")
 	cmd.Flags().IntVar(&parentID, "parent", 0, "only subtasks of this task (0 for top-level)")
 
