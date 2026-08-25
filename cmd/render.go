@@ -72,17 +72,10 @@ func dueLabel(due *store.DueDate, now time.Time) string {
 	}
 }
 
-func renderTaskTable(w io.Writer, entries []store.IndexEntry, now time.Time) {
-	renderTaskTableWithClaims(w, entries, nil, now)
-}
-
-// renderTaskTableWithClaims adds an AGENT column when something is being
-// worked on, and omits it entirely when nothing is — an always-empty column is
-// a permanent question in the reader's mind.
-func renderTaskTableWithClaims(w io.Writer, entries []store.IndexEntry, claims map[int]string, now time.Time) {
-	renderTaskTableFull(w, entries, claims, nil, now)
-}
-
+// renderTaskTableFull adds an AGENT column when something is being worked on,
+// and omits it entirely when nothing is — an always-empty column is a
+// permanent question in the reader's mind. Progress is shown only for tasks
+// that have children.
 func renderTaskTableFull(w io.Writer, entries []store.IndexEntry, claims map[int]string, progress map[int]store.Progress, now time.Time) {
 	if len(entries) == 0 {
 		fmt.Fprintln(w, "No tasks.")

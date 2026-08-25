@@ -56,6 +56,7 @@ due: "2026-08-25"
 project: web
 tags:
     - auth
+parent: 12            # optional — makes this a subtask of #12
 created: 2026-08-22T10:14:00Z
 updated: 2026-08-22T10:20:00Z
 ---
@@ -89,8 +90,8 @@ be able to destroy history.
 
 | Command | What it does |
 |---|---|
-| `add <title>...` | create a task |
-| `list` | list tasks (`--all --project --status --tag --due --overdue --today --search`) |
+| `add <title>...` | create a task (`--parent` makes it a subtask) |
+| `list` | list tasks (`--all --project --status --tag --due --overdue --today --waiting --tree --parent --search`) |
 | `show <ref>` | one task in full, notes included |
 | `done` / `reopen <ref>` | change completion |
 | `edit <ref>` | change fields, or open the file in `$EDITOR` with no flags |
@@ -102,6 +103,17 @@ be able to destroy history.
 | `reindex` | rebuild `state.json` from the Markdown |
 | `notify` | desktop notifications for due and overdue work |
 | `completion <shell>` | shell completion script |
+
+When agents are involved:
+
+| Command | What it does |
+|---|---|
+| `agents` | which agents are connected right now |
+| `claims` | which tasks an agent is working on at this moment |
+| `questions` | tasks where an agent asked you something and stopped |
+| `answer <ref> <text>...` | answer it, and unblock the agent |
+| `history init` / `log` / `save` | keep the data directory under Git |
+| `undo` | revert the last change |
 
 `<ref>` is an exact task id **or** a unique case-insensitive title substring.
 It is deliberately *not* an id prefix: with sequential ids `4` is both a
@@ -124,6 +136,50 @@ None required. Optionally `~/.local/share/taskgo/config.json`:
 
 `TASKGO_DATA_DIR` overrides the store location and always wins over the config
 file, so scripts and tests can pin it.
+
+## Working alongside agents
+
+An agent connected over MCP is not just another writer of task files. Four
+things make its work visible while it is happening, rather than only afterwards
+in the activity log.
+
+```bash
+taskgo agents      # who is connected
+taskgo claims      # what they are working on right now
+taskgo questions   # what they are stuck on and need from you
+```
+
+**Presence is claimed, not inferred.** An agent takes a lease on a task when it
+starts work — automatically on its first write, or deliberately via `claim_task`
+— and the lease expires. Activity tells you who last touched a task; a claim
+tells you who is on it now, and the two are genuinely different questions. An
+agent that created ten tasks and stopped would otherwise look busy on all ten.
+
+**Connected is separate from working.** An agent that is reading, planning or
+waiting on you holds no claim at all, and would be invisible if the roster were
+derived from claims. `taskgo agents` lists sessions; entries carry the server's
+pid, so one killed outright disappears rather than lingering as a lie.
+
+**An agent that cannot decide asks instead of guessing.** The question is stored
+on the task, so it shows up as `?` in `taskgo list`, in the TUI, and in
+`taskgo questions`:
+
+```
+#12  Migrate the session store
+     claude asks: Keep the old cookies working, or force everyone to log in again?
+     answer with: taskgo answer 12 "..."
+```
+
+Answering appends the whole exchange to the task's notes, so the Markdown keeps
+the conversation and not just the outcome. The agent is not blocked while it
+waits — it is expected to go and do something else and check back.
+
+**Big work gets broken down.** Subtasks are a `parent:` field, so
+`taskgo list --tree` nests them and a parent shows progress (`2/5`) rather than
+sitting at "in progress" for two days.
+
+Agents are told all of this at connect time, in the instructions the MCP server
+sends — see `internal/mcpserver/instructions.go`.
 
 ## History and undo
 
@@ -179,6 +235,9 @@ The store's tests cover the things that break silently: Markdown round-trip
 fidelity (including a notes body that itself contains a `---` line), reindex
 faithfulness, and concurrent writers getting distinct ids.
 
+If you are an AI agent working on this repository, read `AGENTS.md` — it covers
+the architecture and the invariants this README only shows the outside of.
+
 That last one earned its keep immediately — `flock` is advisory and *per
 process*, so it serialises the CLI against a running MCP server but does not
 serialise goroutines inside one process. The store therefore holds an
@@ -190,9 +249,22 @@ in-process mutex as well; the two locks guard different things.
 claude mcp add taskgo -- taskgo mcp
 ```
 
-Thirteen tools: `list_tasks` `get_task` `create_task` `update_task`
-`complete_task` `reopen_task` `add_note` `search_tasks` `get_overdue`
-`get_today` `list_projects` `create_project` `get_activity`.
+Twenty-one tools:
+
+| | |
+|---|---|
+| tasks | `create_task` `get_task` `update_task` `complete_task` `reopen_task` `add_note` |
+| finding things | `list_tasks` `search_tasks` `get_overdue` `get_today` |
+| projects | `list_projects` `create_project` |
+| presence | `claim_task` `release_task` `list_claims` |
+| asking you | `ask_human` `check_answer` `list_questions` |
+| subtasks | `break_down_task` `get_subtasks` |
+| history | `get_activity` |
+
+The server also sends instructions at initialize, so a connecting agent knows
+the workflow — claim before working, ask rather than guess, break big work down,
+note what you did — before its first tool call, rather than inferring one from
+twenty-one tool descriptions.
 
 Every change an agent makes lands in the same Markdown files the CLI reads, so
 it shows up in `taskgo list` immediately — and every one is recorded as
@@ -217,35 +289,43 @@ panel shows, a detail pane that follows the cursor, and a footer whose keys
 change with the focused panel.
 
 ```
-╭─ 1 Views ────╮╭─ 3 Tasks (9) ─────────────────────────╮
-│ All          ││  2  Ship the MCP server  @taskgo 3d late│
-│ Today        ││  5  Fix the contact form @website       │
-│ Overdue      ││ ...                                     │
-╰──────────────╯╰─────────────────────────────────────────╯
-╭─ 2 Projects ─╮╭─ Detail — #2 ─────────────────────────╮
-│ (all)        ││ Ship the MCP server                    │
-│ infra      3 ││ todo · normal · 3d late · @taskgo      │
-╰──────────────╯╰─────────────────────────────────────────╯
- 9 open · 10 total · 2 overdue · 3 today
- j/k move · space done · n new · e edit · ? help · q quit
+╭─ 1 Views ────╮╭─ 4 Tasks (9) ───────────────────────────╮
+│ All          ││ ?  2  Ship the MCP server @taskgo 3d late│
+│ Needs you    ││    5  Fix the contact form @website      │
+│ Today        ││ ...                                      │
+│ Overdue      ││                                          │
+╰──────────────╯╰──────────────────────────────────────────╯
+╭─ 2 Projects ─╮╭─ Detail — #2 ───────────────────────────╮
+│ (all)        ││ Ship the MCP server                      │
+│ infra      3 ││ todo · normal · 3d late · @taskgo        │
+╰──────────────╯│                                          │
+╭─ 3 Agents ───╮│ claude asks:                             │
+│ claude    #2 ││   Should this ship behind a flag?        │
+╰──────────────╯╰──────────────────────────────────────────╯
+ 9 open · 10 total · 2 overdue · 3 today · 1 waiting on you
+ j/k move · space done · a answer · n new · ? help · q quit
 ```
 
 | Key | |
 |---|---|
-| `1` `2` `3` | focus views, projects, tasks |
+| `1` `2` `3` `4` | focus views, projects, agents, tasks |
 | `tab` / `shift+tab` | cycle panels |
 | `h` / `l` | move between the side panels and the tasks |
 | `j` `k`, `ctrl+d` `ctrl+u`, `g` `G` | move |
 | `space` | complete / reopen |
+| `a` | answer the question an agent is waiting on |
 | `s` `p` | cycle status / priority |
 | `n` | new task, in the selected project |
+| `N` | new subtask of the selected task |
 | `e` | open the Markdown file in `$EDITOR` |
 | `d` | delete, with confirmation |
 | `/` | filter by title |
+| `r` | reload now |
 | `?` | help |
 
-Views and projects compose rather than override, so "Overdue" plus a project
-shows that project's overdue work. The selection bar dims on unfocused panels,
+Views, projects and agents compose rather than override, so "Overdue" plus a
+project shows that project's overdue work, and selecting an agent narrows to
+what it holds. The selection bar dims on unfocused panels,
 so it is always obvious which cursor the keyboard is driving.
 
 It re-reads the store every couple of seconds while idle, so a task an agent
@@ -261,11 +341,13 @@ tell the two apart.
 
 ## Status
 
-Storage, CLI, MCP server, TUI, notifications and completions all work. Tag a
-`v*` release and GoReleaser publishes Linux and macOS binaries.
+Storage, CLI, MCP server, TUI, agent presence, questions, subtasks, Git history,
+notifications and completions all work. Tag a `v*` release and GoReleaser
+publishes Linux and macOS binaries.
 
-Tested: `internal/store`, `internal/mcpserver`, `internal/notify` and `cmd`.
-The `cmd` tests drive the real command tree the way a user would, which is only
-safe because flag values live on a per-invocation struct rather than in
-package-level variables — otherwise one test's `--data-dir` would leak into the
-next. `internal/tui` and `internal/config` have no tests yet.
+Every package is tested. The `cmd` tests drive the real command tree the way a
+user would, which is only safe because flag values live on a per-invocation
+struct rather than in package-level variables — otherwise one test's
+`--data-dir` would leak into the next. The TUI is driven the same way: `Update`
+is a pure function of (model, message), so keystrokes can be sent without a
+terminal and the assertion made against what reached the disk.

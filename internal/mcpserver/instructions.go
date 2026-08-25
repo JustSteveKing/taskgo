@@ -3,7 +3,7 @@ package mcpserver
 // instructions are sent to every client at initialize.
 //
 // Tool descriptions can only say what one tool does. They cannot say when to
-// reach for it, and an agent reading nineteen of them will infer a workflow
+// reach for it, and an agent reading twenty-one of them will infer a workflow
 // that is mostly "create tasks and never touch them again" — which is what
 // taskgo looked like before this existed.
 //
