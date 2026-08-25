@@ -328,6 +328,31 @@ func (s *Store) Delete(actor Actor, id int) error {
 			return err
 		}
 		idx.remove(id)
+
+		// Children outlive their parent, so they are promoted to the level the
+		// deleted task occupied rather than left pointing at an id that no
+		// longer resolves. Tree() already displays orphans this way; this
+		// makes the files on disk say what the display shows, which matters
+		// because the files are the thing a human greps and edits.
+		var children []int
+		for _, e := range idx.Tasks {
+			if e.Parent == id {
+				children = append(children, e.ID)
+			}
+		}
+		for _, childID := range children {
+			child, err := s.Get(childID)
+			if err != nil {
+				return err
+			}
+			child.Parent = t.Parent
+			child.Updated = s.now().UTC().Truncate(time.Second)
+			if err := s.writeTask(child); err != nil {
+				return err
+			}
+			idx.upsert(child)
+		}
+
 		if err := s.writeIndex(idx); err != nil {
 			return err
 		}

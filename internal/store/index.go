@@ -72,11 +72,46 @@ func (s *Store) readIndex() (*Index, error) {
 	if err := json.Unmarshal(data, &idx); err != nil {
 		return nil, fmt.Errorf("parse state.json (run `taskgo reindex` to rebuild it): %w", err)
 	}
+	// An index from a future taskgo may mean something different by the same
+	// fields, so refuse it rather than half-understand it. Reindex is the way
+	// out: the Markdown is canonical and can always rebuild this file.
+	//
+	// Version 0 is an index written before this field existed, not a future
+	// one, so it is read as-is.
+	if idx.Version > indexVersion {
+		return nil, fmt.Errorf(
+			"state.json was written by a newer taskgo (index version %d, this build understands %d); "+
+				"upgrade taskgo, or run `taskgo reindex` to rebuild it from the Markdown",
+			idx.Version, indexVersion)
+	}
 	if idx.NextID < 1 {
 		idx.NextID = 1
 	}
-	idx.Version = indexVersion
 	return &idx, nil
+}
+
+// previousNextID reads just the id counter out of the existing state.json,
+// without the version check readIndex applies.
+//
+// Reindex is the repair path for an index that is damaged, unparseable, or
+// written by a taskgo this build does not understand, so it cannot depend on
+// the index being readable. But the counter is worth rescuing from all three
+// cases: adopting a number that is too high only skips ids, while failing to
+// adopt one risks reusing them, and only one of those is recoverable.
+//
+// Anything unreadable yields 0, leaving the caller with its other sources.
+func (s *Store) previousNextID() int {
+	data, err := os.ReadFile(s.statePath())
+	if err != nil {
+		return 0
+	}
+	var idx struct {
+		NextID int `json:"nextId"`
+	}
+	if err := json.Unmarshal(data, &idx); err != nil {
+		return 0
+	}
+	return idx.NextID
 }
 
 func (s *Store) writeIndex(idx *Index) error {
@@ -131,6 +166,25 @@ func (s *Store) Reindex() (*Index, error) {
 			if t.ID >= idx.NextID {
 				idx.NextID = t.ID + 1
 			}
+		}
+
+		// Everything above is derived from the Markdown. The id counter is
+		// not: it is a high-water mark, and the files on disk only know the
+		// ids that still exist. Deleting the newest tasks and rebuilding would
+		// otherwise wind the counter back and hand their ids to different
+		// tasks — which the activity log and Git history would then record
+		// under one id, as though they were the same task.
+		//
+		// So the counter is taken from whichever source has seen furthest and
+		// is never allowed to move backwards. The previous index knows where
+		// the counter had reached; the activity log knows every id ever
+		// issued, and is the only one of the three that survives state.json
+		// being deleted outright.
+		if previous := s.previousNextID(); previous > idx.NextID {
+			idx.NextID = previous
+		}
+		if issued := s.highestTaskID(); issued >= idx.NextID {
+			idx.NextID = issued + 1
 		}
 
 		if err := s.writeIndex(idx); err != nil {

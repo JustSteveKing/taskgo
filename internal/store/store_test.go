@@ -2,6 +2,7 @@ package store
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -792,5 +793,161 @@ func TestTreePromotesOrphanedMatches(t *testing.T) {
 	}
 	if nodes[0].Depth != 0 {
 		t.Errorf("the orphaned match should be promoted to depth 0, got %d", nodes[0].Depth)
+	}
+}
+
+// The id counter is a high-water mark, not a derived value. Deleting the
+// newest tasks and rebuilding must not wind it back onto ids the activity log
+// has already attributed to different tasks.
+func TestReindexNeverRewindsTheIDCounter(t *testing.T) {
+	s := newTestStore(t)
+
+	for _, title := range []string{"One", "Two", "Three"} {
+		if _, err := s.Create(ActorHuman, NewTask{Title: title}); err != nil {
+			t.Fatalf("Create %s: %v", title, err)
+		}
+	}
+	if err := s.Delete(ActorHuman, 3); err != nil {
+		t.Fatalf("Delete 3: %v", err)
+	}
+	if err := s.Delete(ActorHuman, 2); err != nil {
+		t.Fatalf("Delete 2: %v", err)
+	}
+
+	idx, err := s.Reindex()
+	if err != nil {
+		t.Fatalf("Reindex: %v", err)
+	}
+	if idx.NextID != 4 {
+		t.Fatalf("nextId = %d after reindex, want 4; ids 2 and 3 have been issued", idx.NextID)
+	}
+
+	created, err := s.Create(ActorHuman, NewTask{Title: "A brand new task"})
+	if err != nil {
+		t.Fatalf("Create after reindex: %v", err)
+	}
+	if created.ID != 4 {
+		t.Errorf("new task got id %d, reusing an id the activity log already spent", created.ID)
+	}
+}
+
+// Losing state.json entirely is the case the previous index cannot cover, so
+// the counter has to come from the log, which is never rebuilt.
+func TestReindexRecoversTheIDCounterFromTheActivityLog(t *testing.T) {
+	s := newTestStore(t)
+
+	for _, title := range []string{"One", "Two", "Three"} {
+		if _, err := s.Create(ActorHuman, NewTask{Title: title}); err != nil {
+			t.Fatalf("Create %s: %v", title, err)
+		}
+	}
+	if err := s.Delete(ActorHuman, 3); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if err := os.Remove(s.statePath()); err != nil {
+		t.Fatalf("remove state.json: %v", err)
+	}
+
+	idx, err := s.Reindex()
+	if err != nil {
+		t.Fatalf("Reindex: %v", err)
+	}
+	if idx.NextID != 4 {
+		t.Errorf("nextId = %d, want 4 from the activity log", idx.NextID)
+	}
+}
+
+// An index written by a future taskgo may mean something different by the same
+// fields, so reading it is refused rather than guessed at.
+func TestIndexFromANewerVersionIsRefused(t *testing.T) {
+	s := newTestStore(t)
+	if _, err := s.Create(ActorHuman, NewTask{Title: "Existing"}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	future := fmt.Sprintf(`{"version":%d,"nextId":9,"tasks":[]}`, indexVersion+1)
+	if err := os.WriteFile(s.statePath(), []byte(future), 0o644); err != nil {
+		t.Fatalf("write future index: %v", err)
+	}
+
+	if _, err := s.List(Filter{}); err == nil {
+		t.Error("expected List to refuse an index from a newer taskgo")
+	} else if !strings.Contains(err.Error(), "newer taskgo") {
+		t.Errorf("error should name the reason, got: %v", err)
+	}
+
+	// Reindex is the documented way out, and must still work.
+	idx, err := s.Reindex()
+	if err != nil {
+		t.Fatalf("Reindex should rebuild over a future index: %v", err)
+	}
+	if idx.NextID != 9 {
+		t.Errorf("nextId = %d, want 9 kept from the index it replaced", idx.NextID)
+	}
+}
+
+// A deleted parent must not leave its children pointing at an id that no
+// longer resolves.
+func TestDeletingAParentPromotesItsChildren(t *testing.T) {
+	s := newTestStore(t)
+
+	grandparent, err := s.Create(ActorHuman, NewTask{Title: "Grandparent"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	parent, err := s.Create(ActorHuman, NewTask{Title: "Parent", Parent: grandparent.ID})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	child, err := s.Create(ActorHuman, NewTask{Title: "Child", Parent: parent.ID})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	if err := s.Delete(ActorHuman, parent.ID); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+
+	// On disk, not just in the index — the Markdown is what a human reads.
+	reread, err := s.Get(child.ID)
+	if err != nil {
+		t.Fatalf("Get child: %v", err)
+	}
+	if reread.Parent != grandparent.ID {
+		t.Errorf("child parent = %d, want %d", reread.Parent, grandparent.ID)
+	}
+
+	kids, err := s.Children(grandparent.ID)
+	if err != nil {
+		t.Fatalf("Children: %v", err)
+	}
+	if len(kids) != 1 || kids[0].ID != child.ID {
+		t.Errorf("grandparent should have adopted the child, got %+v", kids)
+	}
+}
+
+// With no grandparent to inherit, a promoted child becomes top-level.
+func TestDeletingATopLevelParentDetachesItsChildren(t *testing.T) {
+	s := newTestStore(t)
+
+	parent, err := s.Create(ActorHuman, NewTask{Title: "Parent"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	child, err := s.Create(ActorHuman, NewTask{Title: "Child", Parent: parent.ID})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	if err := s.Delete(ActorHuman, parent.ID); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+
+	reread, err := s.Get(child.ID)
+	if err != nil {
+		t.Fatalf("Get child: %v", err)
+	}
+	if reread.Parent != 0 {
+		t.Errorf("child parent = %d, want 0", reread.Parent)
 	}
 }

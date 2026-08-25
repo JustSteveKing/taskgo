@@ -98,6 +98,45 @@ func (s *Store) appendEvent(e Event) error {
 	return nil
 }
 
+// highestTaskID returns the largest task id that appears anywhere in the
+// activity log.
+//
+// The log is append-only and never rebuilt, which makes it the only record of
+// ids that have been issued and since deleted — state.json knows the ids that
+// still exist, and the task files know only their own. Reindex consults this
+// so that rebuilding a lost index cannot rewind the counter onto an id the log
+// already attributes to a different task.
+//
+// It returns 0 rather than an error for a missing or damaged log: the absence
+// of this information must not fail a rebuild, and the caller has two other
+// sources for the same number.
+func (s *Store) highestTaskID() int {
+	data, err := os.ReadFile(s.activityPath())
+	if err != nil {
+		return 0
+	}
+
+	highest := 0
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		// Only the id is needed, so a torn or partly unknown line still
+		// contributes whatever it does carry.
+		var e struct {
+			Task int `json:"task"`
+		}
+		if err := json.Unmarshal([]byte(line), &e); err != nil {
+			continue
+		}
+		if e.Task > highest {
+			highest = e.Task
+		}
+	}
+	return highest
+}
+
 // Activity returns the most recent events, newest first. A limit of 0 or less
 // means everything.
 func (s *Store) Activity(limit int) ([]Event, error) {

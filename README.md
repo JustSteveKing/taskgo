@@ -56,6 +56,13 @@ Free-form notes, in Markdown.
 first. Edit a task file by hand, run `taskgo reindex`, and the change is picked
 up — that round trip is a supported workflow, not an accident.
 
+The one thing in `state.json` that is *not* derived is the id counter. The files
+on disk only know the ids that still exist, so rebuilding from them alone would
+wind the counter back over deleted ids and issue them twice — and the activity
+log would then record two different tasks under one id. The counter is a
+high-water mark: `reindex` takes the furthest of the files, the previous index
+and the activity log, and never moves it backwards.
+
 **Every write is atomic.** Temp file, fsync, rename, fsync the directory.
 Rename is atomic within a filesystem, so a reader never sees a partial file —
 which is why *reads take no lock at all*. Only writers lock.
