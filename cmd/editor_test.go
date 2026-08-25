@@ -78,7 +78,7 @@ func TestEditWithNoFlagsOpensTheEditorAndReindexes(t *testing.T) {
 
 	// A fake editor that rewrites the title, standing in for a human typing.
 	editor := filepath.Join(t.TempDir(), "fake-editor")
-	script := "#!/bin/sh\nsed -i 's/Before the edit/After the edit/' \"$1\"\n"
+	script := fakeEditorScript("Before the edit", "After the edit")
 	if err := os.WriteFile(editor, []byte(script), 0o755); err != nil {
 		t.Fatalf("write fake editor: %v", err)
 	}
@@ -110,7 +110,7 @@ func TestEditWorksInADirectoryThatNeedsQuoting(t *testing.T) {
 	mustRun(t, dir, "add", "Quote me")
 
 	editor := filepath.Join(t.TempDir(), "fake-editor")
-	script := "#!/bin/sh\nsed -i 's/Quote me/Quoted fine/' \"$1\"\n"
+	script := fakeEditorScript("Quote me", "Quoted fine")
 	if err := os.WriteFile(editor, []byte(script), 0o755); err != nil {
 		t.Fatalf("write fake editor: %v", err)
 	}
@@ -145,4 +145,17 @@ func TestEditReportsAFailingEditor(t *testing.T) {
 	if !strings.Contains(err.Error(), "editor") {
 		t.Errorf("error should name the editor, got: %v", err)
 	}
+}
+
+// fakeEditorScript builds a stand-in for $EDITOR that performs one
+// substitution on the file it is handed.
+//
+// It redirects rather than using `sed -i`, because the in-place flag takes a
+// mandatory backup suffix on BSD sed and so fails on macOS — one of the two
+// platforms taskgo claims. The CI macOS job caught exactly this.
+func fakeEditorScript(from, to string) string {
+	return "#!/bin/sh\n" +
+		"set -e\n" +
+		"sed 's/" + from + "/" + to + "/' \"$1\" > \"$1.new\"\n" +
+		"mv \"$1.new\" \"$1\"\n"
 }

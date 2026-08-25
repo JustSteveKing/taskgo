@@ -175,7 +175,10 @@ terminal is misreporting its row count (common on fractionally scaled displays).
   something real.
 - Shelling out is testable with a fake: `cmd/editor_test.go` writes a small
   `sh` script that rewrites the file, points `$EDITOR` at it, and asserts the
-  hand edit reached the index. Prefer that to leaving a path uncovered.
+  hand edit reached the index. Prefer that to leaving a path uncovered — but
+  keep the script POSIX. `sed -i` takes a mandatory backup suffix on BSD sed,
+  so it fails on macOS; redirect and `mv` instead. CI's macOS job is what
+  catches this, and it is the reason that job exists.
 - Coverage is not the target, but the gaps left are deliberate: `stdio.Run`
   and `tui.Run` (they own the process), `notify.Send` (fires real desktop
   popups — `--dry-run` covers the decision behind it), and `main`/`Execute`
