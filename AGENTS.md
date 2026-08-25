@@ -173,10 +173,13 @@ terminal is misreporting its row count (common on fractionally scaled displays).
 - `internal/agents` fakes a dead process by running `true` and reusing its pid
   once it has exited, rather than inventing a number that might belong to
   something real.
-- Coverage is not the target, but the gaps left are deliberate:
-  `internal/mcpserver/stdio.go` (process-level transport wiring), `notify.Send`
-  (fires real desktop popups — `--dry-run` covers the decision logic), and
-  `editInEditor` (spawns `$EDITOR`).
+- Shelling out is testable with a fake: `cmd/editor_test.go` writes a small
+  `sh` script that rewrites the file, points `$EDITOR` at it, and asserts the
+  hand edit reached the index. Prefer that to leaving a path uncovered.
+- Coverage is not the target, but the gaps left are deliberate: `stdio.Run`
+  and `tui.Run` (they own the process), `notify.Send` (fires real desktop
+  popups — `--dry-run` covers the decision behind it), and `main`/`Execute`
+  (they call `os.Exit`).
 
 Two things worth knowing before writing a test here, because both have already
 caught a wrong assumption:
@@ -185,3 +188,8 @@ caught a wrong assumption:
   happens from the Done view, not in place.
 - **The list sort is not the priority field first.** A pending question outranks
   everything, then a due date, then priority, then id. See `sortEntries`.
+- **A claim never stops being explicit.** `Take` does
+  `existing.Explicit || explicit`, so a later implicit write cannot weaken a
+  lease the agent asked for. Test the two states on two tasks, not one.
+- **lipgloss emits no escape codes under `go test`**, so every style renders
+  identically and colour cannot be asserted. Test the words; leave the colour.
