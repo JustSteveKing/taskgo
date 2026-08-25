@@ -12,6 +12,19 @@ taskgo list
 taskgo done login          # resolve by unique title substring
 ```
 
+## Install
+
+```bash
+go install github.com/JustSteveKing/taskgo@latest
+```
+
+Or download a binary from the [releases](https://github.com/JustSteveKing/taskgo/releases).
+
+Linux and macOS. Windows fails at compile time rather than silently: agent
+liveness is decided by signalling the MCP server's pid, `taskgo edit` shells out
+through `sh -c`, and notifications are `notify-send` with a systemd user timer.
+Notifications are Linux-only either way.
+
 ## Why plain files
 
 The point is that you can always check. `cat` a task, `grep` the directory,
@@ -158,6 +171,10 @@ anything is uncommitted, rather than sweeping your edit into the revert.
 go build ./... && go vet ./... && go test -race ./...
 ```
 
+Go 1.25 or later (the MCP SDK sets that floor). CI runs the same three commands
+on Linux and macOS, plus a `gofmt` check and a build that asserts Windows still
+fails with the platform message.
+
 The store's tests cover the things that break silently: Markdown round-trip
 fidelity (including a notes body that itself contains a `---` line), reindex
 faithfulness, and concurrent writers getting distinct ids.
@@ -244,8 +261,8 @@ tell the two apart.
 
 ## Status
 
-Storage, CLI, MCP server, TUI, notifications and completions all work. Next: a
-release build.
+Storage, CLI, MCP server, TUI, notifications and completions all work. Tag a
+`v*` release and GoReleaser publishes Linux and macOS binaries.
 
 Tested: `internal/store`, `internal/mcpserver`, `internal/notify` and `cmd`.
 The `cmd` tests drive the real command tree the way a user would, which is only

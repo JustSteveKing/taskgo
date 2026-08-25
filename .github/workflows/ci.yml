@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    # Both platforms taskgo claims to support. macOS is here because the parts
+    # that are not portable — pid liveness, the editor shell-out — are exactly
+    # the parts a Linux-only run would never exercise.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "These files need gofmt:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - run: go build ./...
+      - run: go vet ./...
+
+      # -race matters more than usual here: the store's whole reason for
+      # holding an in-process mutex as well as a file lock is that flock does
+      # not serialise goroutines, and that is only visible under the detector.
+      - run: go test -race ./...
+
+  # taskgo does not support Windows, and says so at compile time. This proves
+  # the guard still fires, so the failure stays deliberate rather than becoming
+  # a surprise for whoever tries.
+  unsupported-platform:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Windows build must fail with the platform message
+        run: |
+          if output=$(GOOS=windows go build ./... 2>&1); then
+            echo "Expected the Windows build to fail, but it succeeded."
+            exit 1
+          fi
+          echo "$output"
+          echo "$output" | grep -q "taskgo_supports_linux_and_macos_only"
