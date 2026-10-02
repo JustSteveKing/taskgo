@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -25,12 +26,13 @@ func runCompletion(t *testing.T, args ...string) (string, error) {
 func TestCompletionInstall(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	t.Setenv("XDG_DATA_HOME", home+"/data")
-	t.Setenv("XDG_CONFIG_HOME", home+"/config")
+	t.Setenv("USERPROFILE", home) // os.UserHomeDir on Windows
+	t.Setenv("XDG_DATA_HOME", filepath.Join(home, "data"))
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "config"))
 	t.Setenv("PATH", "/nonexistent") // no zsh to ask, wherever this runs
 
 	out, err := runCompletion(t, "completion", "install", "bash")
-	path := home + "/data/bash-completion/completions/taskgo"
+	path := filepath.Join(home, "data", "bash-completion", "completions", "taskgo")
 	if err != nil || !strings.HasPrefix(out, "Installed bash completions to "+path) {
 		t.Fatalf("bash: %q %v", out, err)
 	}
@@ -39,7 +41,7 @@ func TestCompletionInstall(t *testing.T) {
 	}
 
 	runCompletion(t, "completion", "install", "fish")
-	if _, err := os.Stat(home + "/config/fish/completions/taskgo.fish"); err != nil {
+	if _, err := os.Stat(filepath.Join(home, "config", "fish", "completions", "taskgo.fish")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -49,11 +51,11 @@ func TestCompletionInstall(t *testing.T) {
 	if !strings.Contains(out, "is not on zsh's fpath") {
 		t.Fatalf("zsh: %q", out)
 	}
-	if _, err := os.Stat(home + "/.zshrc"); err == nil {
+	if _, err := os.Stat(filepath.Join(home, ".zshrc")); err == nil {
 		t.Fatal("~/.zshrc must not be touched without --yes")
 	}
 	runCompletion(t, "completion", "install", "zsh", "--yes")
-	if rc, _ := os.ReadFile(home + "/.zshrc"); !strings.Contains(string(rc), "# Added by completion install") {
+	if rc, _ := os.ReadFile(filepath.Join(home, ".zshrc")); !strings.Contains(string(rc), "# Added by completion install") {
 		t.Fatalf(".zshrc: %q", rc)
 	}
 
