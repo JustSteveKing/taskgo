@@ -154,6 +154,16 @@ appear on their own — but not while the user is typing in a text input.
 terminal sizes; if the UI overflows in a real terminal but that test passes, the
 terminal is misreporting its row count (common on fractionally scaled displays).
 
+**`internal/termquiet` and its blank import in `main.go` are load-bearing.**
+Bubble Tea v1 asks the terminal for its background colour in its package
+`init`, so every taskgo command, not just the TUI, waited out a five-second
+timeout on a terminal that never answers (measured: `taskgo --version` took
+5.01s). termquiet declares the background first, relying on Go's specified
+package initialisation order (imports first, then import path, and
+`JustSteveKing` sorts before `charmbracelet`). `TestNoBackgroundQuery` in
+package main runs the built binary in a pty (creack/pty, test-only) and fails
+at 4s if the import is removed or the package moved. Found in mavis first.
+
 ## Testing conventions
 
 - `cmd` tests drive the **real** command tree via `run`/`mustRun` helpers. This

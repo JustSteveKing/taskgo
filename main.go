@@ -1,6 +1,11 @@
 package main
 
-import "github.com/JustSteveKing/taskgo/cmd"
+import (
+	"github.com/JustSteveKing/taskgo/cmd"
+
+	// Before anything imports Bubble Tea: see the package doc.
+	_ "github.com/JustSteveKing/taskgo/internal/termquiet"
+)
 
 // version is overridden at build time:
 //
