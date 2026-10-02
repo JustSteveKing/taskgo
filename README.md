@@ -25,6 +25,19 @@ liveness is decided by signalling the MCP server's pid, `taskgo edit` shells out
 through `sh -c`, and notifications are `notify-send` with a systemd user timer.
 Notifications are Linux-only either way.
 
+### Tab completion
+
+```bash
+taskgo completion install
+```
+
+It works out your shell from `$SHELL` (or name it: `bash`, `zsh`, `fish`)
+and writes the script where that shell loads completions from, so there is
+nothing to source by hand. bash needs bash-completion installed. For zsh it
+checks the folder is on your `fpath` and prints the lines to add to
+`~/.zshrc` if not, or adds them with `--yes`. `taskgo completion uninstall`
+removes it.
+
 ## Why plain files
 
 The point is that you can always check. `cat` a task, `grep` the directory,

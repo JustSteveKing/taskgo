@@ -118,6 +118,7 @@ diff and edit by hand.`,
 	)
 
 	a.registerCompletions(root)
+	addCompletionInstall(root)
 	return root
 }
 
